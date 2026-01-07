@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Kwork Helper
 // @namespace http://tampermonkey.net/
-// @version 1.2
+// @version 1.2.1
 // @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh.
 // @author Herman Guilliman
 // @match https://kwork.ru/projects*
@@ -99,7 +99,6 @@
     .kw-spam-card:hover { opacity: 0.9; filter: grayscale(0%); }
     .kw-hidden { display: none !important; }
     .kw-urgent-fire { font-size: 14px; margin-right: 5px; animation: pulse 1.5s infinite; cursor: help; }
-    .kw-new-dot { width: 8px; height: 8px; background: #ff4757; border-radius: 50%; display: inline-block; margin-right: 8px; animation: pulse 1s infinite; }
     .kw-copy-btn { cursor: pointer; margin-left: 8px; opacity: 0.3; font-size: 14px; background: none; border: none; padding: 0; }
     .kw-copy-btn:hover { opacity: 1; color: #007bff; }
     .kw-note-icon { cursor: pointer; margin-left: 5px; font-size: 12px; opacity: 0.3; transition: opacity 0.2s; }
@@ -517,7 +516,6 @@
             this.config = new ConfigManager();
             this.processor = new CardProcessor(this);
             this.ui = new UIManager(this);
-            this.lastTopId = localStorage.getItem("kw_last_top_id");
         }
         init() {
             this.ui.renderPanel();
@@ -537,7 +535,6 @@
             document.querySelectorAll(".want-card").forEach((card) => {
                 this.processor.process(card);
             });
-            this.checkNewOrders();
         }
         reprocessAll(force = false) {
             if (force) {
@@ -551,24 +548,6 @@
                     n.remove();
                 });
             this.runLoop();
-        }
-        checkNewOrders() {
-            const link = document.querySelector(".want-card h1 a");
-            if (!link) {
-                return;
-            }
-            const id = link.getAttribute("href");
-            if (this.lastTopId && this.lastTopId !== id) {
-                const title = link.parentNode;
-                if (title && !title.querySelector(".kw-new-dot")) {
-                    title.insertAdjacentHTML(
-                        "afterbegin",
-                        '<span class="kw-new-dot"></span>'
-                    );
-                }
-            }
-            this.lastTopId = id;
-            localStorage.setItem("kw_last_top_id", id);
         }
         tick() {
             if (!this.config.get(this.config.keys.autoRefresh)) {
