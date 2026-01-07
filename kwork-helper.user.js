@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name Kwork Helper
 // @namespace http://tampermonkey.net/
-// @version 1.3.2
-// @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh, infinite scroll.
+// @version 1.3.3
+// @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh, infinite scroll, avatar zoom.
 // @grant GM_notification
 // @grant GM_setClipboard
 // @author Herman Guilliman
@@ -97,15 +97,8 @@
     .kw-badge-neutral { background: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; }
     .kw-badge-spam { background: #f2f2f2; color: #999; border: 1px solid #e0e0e0; margin-bottom: 5px; display:inline-block; font-size: 10px; border-radius: 12px; text-transform: uppercase; padding: 2px 8px; }
     
-    /* MODERN STRIPS DESIGN */
-    .kw-strip-good { 
-        border-left: 2px solid #58cf7e !important; /* Soft Mint Green */
-        background: linear-gradient(90deg, rgba(88, 207, 126, 0.08) 0%, #fff 15%) !important;
-    }
-    .kw-strip-bad { 
-        border-left: 2px solid #ff6b6b !important; /* Soft Coral Red */
-        background: linear-gradient(90deg, rgba(255, 107, 107, 0.08) 0%, #fff 15%) !important;
-    }
+    .kw-strip-good { border-left: 2px solid #58cf7e !important; background: linear-gradient(90deg, rgba(88, 207, 126, 0.08) 0%, #fff 15%) !important; }
+    .kw-strip-bad { border-left: 2px solid #ff6b6b !important; background: linear-gradient(90deg, rgba(255, 107, 107, 0.08) 0%, #fff 15%) !important; }
 
     .kw-spam-card { opacity: 0.4; filter: grayscale(100%); transition: all 0.3s; }
     .kw-spam-card:hover { opacity: 0.9; filter: grayscale(0%); }
@@ -137,6 +130,21 @@
     }
     .kw-loader { text-align: center; padding: 20px; font-size: 14px; color: #888; font-weight: bold; display: none; width: 100%; clear: both; background: #fafafa; border: 1px dashed #ccc; margin-top: 20px; }
     .kw-loader.active { display: block; }
+
+    /* AVATAR ZOOM CSS */
+    .kw-avatar-large-popup {
+        position: fixed; z-index: 999999;
+        width: 150px; height: 150px;
+        background: #fff; border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        border: 4px solid #fff;
+        overflow: hidden; pointer-events: none;
+        opacity: 0; visibility: hidden;
+        transform: scale(0.8);
+        transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+    .kw-avatar-large-popup.show { opacity: 1; visibility: visible; transform: scale(1); }
+    .kw-avatar-large-popup img { width: 100%; height: 100%; object-fit: cover; }
 
     @keyframes pulse-ring { 0% { transform: scale(1); opacity: 1; } 100% { transform: scaleX(1.1) scaleY(1.3); opacity: 0; } }
     @keyframes pulse { 0% { transform: scale(0.95); opacity: 0.7; } 50% { transform: scale(1.1); opacity: 1; } 100% { transform: scale(0.95); opacity: 0.7; } }
@@ -184,6 +192,74 @@
         }
     }
 
+    class AvatarManager {
+        constructor() {
+            this.popup = null;
+            this.timer = null;
+            this.createPopup();
+        }
+
+        createPopup() {
+            this.popup = document.createElement("div");
+            this.popup.className = "kw-avatar-large-popup";
+            this.popup.innerHTML = `<img src="" alt="">`;
+            document.body.appendChild(this.popup);
+        }
+
+        bind(imgElement) {
+            if (imgElement.dataset.kwZoomBound) return;
+            imgElement.dataset.kwZoomBound = "true";
+
+            imgElement.addEventListener("mouseenter", (e) => {
+                this.timer = setTimeout(() => {
+                    this.show(imgElement);
+                }, 2000);
+            });
+
+            imgElement.addEventListener("mouseleave", () => {
+                if (this.timer) clearTimeout(this.timer);
+                this.hide();
+            });
+
+            imgElement.addEventListener("click", () => this.hide());
+        }
+
+        show(imgElement) {
+            const src = imgElement.src || imgElement.getAttribute("srcset");
+            if (!src) return;
+            const url = src.split(" ")[0];
+            const bigUrl = url.replace(
+                /\/files\/avatar\/(big|big_r)\//,
+                "/files/avatar/large_r/"
+            );
+
+            const rect = imgElement.getBoundingClientRect();
+            const popupSize = 150;
+
+            let top = rect.top + rect.height / 2 - popupSize / 2;
+            let left = rect.left + rect.width + 10;
+
+            if (top < 10) top = 10;
+            if (left + popupSize > window.innerWidth) {
+                left = rect.left - popupSize - 10;
+            }
+
+            this.popup.querySelector("img").src = bigUrl;
+            this.popup.style.top = top + "px";
+            this.popup.style.left = left + "px";
+            this.popup.classList.add("show");
+        }
+
+        hide() {
+            if (this.timer) clearTimeout(this.timer);
+            this.popup.classList.remove("show");
+            setTimeout(() => {
+                if (!this.popup.classList.contains("show"))
+                    this.popup.querySelector("img").src = "";
+            }, 300);
+        }
+    }
+
     class InfiniteScrollManager {
         constructor(app) {
             this.app = app;
@@ -195,129 +271,97 @@
             this.loader = null;
             this.container = null;
             this.iframe = null;
-
             setTimeout(() => this.init(), 1000);
         }
-
         init() {
             const params = new URLSearchParams(window.location.search);
             this.page = parseInt(params.get("page")) || 1;
-
             this.loader = document.createElement("div");
             this.loader.className = "kw-loader";
             this.loader.innerHTML = "⏳ Загрузка заказов...";
-
             this.container =
                 document.querySelector(".project-list") ||
                 document.querySelector(".wants-content");
             if (this.container) {
                 const innerList = this.container.querySelector(".project-list");
                 if (innerList) this.container = innerList;
-                if (this.container.parentNode) {
+                if (this.container.parentNode)
                     this.container.parentNode.insertBefore(
                         this.loader,
                         this.container.nextSibling
                     );
-                }
             }
-
             window.addEventListener("scroll", () => {
                 if (this.isEnabled) this.onScroll();
             });
-
             this.updateState();
         }
-
         toggle(state) {
             this.isEnabled = state;
             this.updateState();
         }
-
         updateState() {
             const pags = document.querySelectorAll(".pagination, .paging");
             pags.forEach((el) => {
                 el.style.display = this.isEnabled ? "none" : "";
             });
-            if (this.loader) {
+            if (this.loader)
                 this.loader.style.display = this.isEnabled ? "none" : "none";
-            }
         }
-
         onScroll() {
             if (this.isLoading) return;
             const scrollHeight = document.documentElement.scrollHeight;
             const scrollTop =
                 window.scrollY || document.documentElement.scrollTop;
             const clientHeight = document.documentElement.clientHeight;
-            if (scrollTop + clientHeight >= scrollHeight - 600) {
+            if (scrollTop + clientHeight >= scrollHeight - 600)
                 this.loadNextPage();
-            }
         }
-
         loadNextPage() {
             this.isLoading = true;
             this.loader.classList.add("active");
             this.loader.style.display = "block";
-
             this.page++;
             const url = new URL(window.location.href);
             url.searchParams.set("page", this.page);
-
-            console.log("KW Helper: Iframe Loading:", url.toString());
-
             if (this.iframe) this.iframe.remove();
-
             this.iframe = document.createElement("iframe");
             this.iframe.style.display = "none";
             this.iframe.style.width = "0";
             this.iframe.style.height = "0";
             this.iframe.src = url.toString();
-
             document.body.appendChild(this.iframe);
-
             this.iframe.onload = () => {
                 this.onIframeLoad();
             };
-
             setTimeout(() => {
                 if (this.isLoading) {
-                    console.log("KW Helper: Iframe timeout");
                     this.isLoading = false;
                     this.loader.classList.remove("active");
                 }
             }, 10000);
         }
-
         onIframeLoad() {
             try {
                 const doc =
                     this.iframe.contentDocument ||
                     this.iframe.contentWindow.document;
-
                 setTimeout(() => {
                     const newCards = doc.querySelectorAll(".want-card");
-                    console.log(
-                        "KW Helper: Iframe loaded. Found cards:",
-                        newCards.length
-                    );
-
                     if (newCards.length === 0) {
                         this.loader.innerHTML = "🏁 Заказов больше нет";
                         return;
                     }
-
                     if (this.container) {
                         newCards.forEach((card) => {
                             const importedCard = document.adoptNode(card);
                             this.container.appendChild(importedCard);
                         });
-
                         this.app.processor.processBatch(
                             document.querySelectorAll(".want-card")
                         );
                         this.loader.innerHTML = "⏳ Загрузка заказов...";
                     }
-
                     this.iframe.remove();
                     this.iframe = null;
                     this.isLoading = false;
@@ -325,7 +369,6 @@
                     this.loader.style.display = "none";
                 }, 1500);
             } catch (err) {
-                console.error("KW Helper: Iframe error", err);
                 this.loader.innerHTML = "❌ Ошибка доступа к Iframe";
                 this.isLoading = false;
                 this.loader.classList.remove("active");
@@ -346,20 +389,16 @@
             if (document.getElementById("kw_panel")) return;
             const div = document.createElement("div");
             div.id = "kw_panel";
-
             let isAuto = this.app.config.get(this.app.config.keys.autoRefresh);
             let isInf = this.app.config.get(
                 this.app.config.keys.infiniteScroll
             );
-
             if (isAuto && isInf) {
                 isInf = false;
                 this.app.config.set(this.app.config.keys.infiniteScroll, false);
                 this.app.infinite.toggle(false);
             }
-
             const isHide = this.app.config.get(this.app.config.keys.hideSpam);
-
             div.innerHTML = `
             <div class="kw-fab" id="kw_fab_btn">KH</div>
             <div class="kw-menu">
@@ -384,13 +423,11 @@
             this.bindEvents();
             this.updateTimerUI();
         }
-
         bindEvents() {
             const fab = document.getElementById("kw_fab_btn");
             const autoInp = document.getElementById("kw_inp_auto");
             const infInp = document.getElementById("kw_inp_inf");
             const spamInp = document.getElementById("kw_inp_spam");
-
             fab.addEventListener("click", () =>
                 this.panel.classList.toggle("open")
             );
@@ -398,14 +435,12 @@
                 if (!this.panel.contains(e.target))
                     this.panel.classList.remove("open");
             });
-
             autoInp.addEventListener("change", (e) => {
                 const isEnabled = e.target.checked;
                 this.app.config.set(
                     this.app.config.keys.autoRefresh,
                     isEnabled
                 );
-
                 if (isEnabled) {
                     infInp.checked = false;
                     this.app.config.set(
@@ -413,14 +448,12 @@
                         false
                     );
                     this.app.infinite.toggle(false);
-
                     this.timeLeft = DEFAULTS.refreshTime;
                     window.location.reload();
                 } else {
                     this.updateTimerUI();
                 }
             });
-
             infInp.addEventListener("change", (e) => {
                 const isEnabled = e.target.checked;
                 this.app.config.set(
@@ -428,7 +461,6 @@
                     isEnabled
                 );
                 this.app.infinite.toggle(isEnabled);
-
                 if (isEnabled) {
                     autoInp.checked = false;
                     this.app.config.set(
@@ -438,7 +470,6 @@
                     this.updateTimerUI();
                 }
             });
-
             spamInp.addEventListener("change", (e) => {
                 this.app.config.set(
                     this.app.config.keys.hideSpam,
@@ -446,7 +477,6 @@
                 );
                 this.app.processor.toggleSpam(e.target.checked);
             });
-
             document
                 .getElementById("kw_btn_settings")
                 .addEventListener("click", () => {
@@ -454,7 +484,6 @@
                     this.openSettings();
                 });
         }
-
         updateTimerUI() {
             const isAuto = this.app.config.get(
                 this.app.config.keys.autoRefresh
@@ -535,6 +564,12 @@
             const textContent = (card.innerText || "").toLowerCase();
             const stopWords = this.app.config.getStopWords();
             let isSpam = false;
+
+            const avatarImg = card.querySelector(".user-avatar__picture");
+            if (avatarImg) {
+                this.app.avatarManager.bind(avatarImg);
+            }
+
             if (stopWords.some((w) => textContent.includes(w))) {
                 isSpam = true;
                 if (processed !== "spam") this.markAsSpam(card);
@@ -637,7 +672,6 @@
             const el = card.querySelector(".wants-card__price");
             if (!el) return;
             const p = parseInt(el.textContent.replace(/\D/g, ""));
-
             if (p >= DEFAULTS.goodPrice) card.classList.add("kw-strip-good");
             else if (p <= DEFAULTS.badPrice && p > 0)
                 card.classList.add("kw-strip-bad");
@@ -690,6 +724,7 @@
     class KworkAssistant {
         constructor() {
             this.config = new ConfigManager();
+            this.avatarManager = new AvatarManager();
             this.processor = new CardProcessor(this);
             this.infinite = new InfiniteScrollManager(this);
             this.ui = new UIManager(this);
@@ -710,27 +745,22 @@
         fixExpandButtons() {
             document.addEventListener("click", (e) => {
                 if (!e.target.classList.contains("kw-link-dashed")) return;
-
                 const btn = e.target;
                 const text = btn.innerText.toLowerCase();
-
                 if (
                     !text.includes("показать полностью") &&
                     !text.includes("скрыть")
                 )
                     return;
-
                 const descContainer = btn.closest(
                     ".wants-card__description-text"
                 );
                 if (!descContainer) return;
-
                 const shortBlock =
                     descContainer.querySelector(".overflow-hidden");
                 const fullBlock = shortBlock
                     ? shortBlock.nextElementSibling
                     : null;
-
                 if (shortBlock && fullBlock) {
                     if (text.includes("показать полностью")) {
                         shortBlock.style.display = "none";
