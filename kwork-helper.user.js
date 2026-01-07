@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Kwork Helper
 // @namespace http://tampermonkey.net/
-// @version 1.3
+// @version 1.3.1
 // @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh, infinite scroll.
 // @grant GM_notification
 // @grant GM_setClipboard
@@ -687,6 +687,7 @@
         }
         init() {
             this.ui.renderPanel();
+            this.fixExpandButtons();
             this.runLoop();
             new MutationObserver((ms) => {
                 if (ms.some((m) => m.addedNodes.length)) this.runLoop();
@@ -696,6 +697,41 @@
             );
             setInterval(() => this.tick(), 1000);
             setInterval(() => this.runLoop(), 500);
+        }
+        fixExpandButtons() {
+            document.addEventListener("click", (e) => {
+                if (!e.target.classList.contains("kw-link-dashed")) return;
+
+                const btn = e.target;
+                const text = btn.innerText.toLowerCase();
+
+                if (
+                    !text.includes("показать полностью") &&
+                    !text.includes("скрыть")
+                )
+                    return;
+
+                const descContainer = btn.closest(
+                    ".wants-card__description-text"
+                );
+                if (!descContainer) return;
+
+                const shortBlock =
+                    descContainer.querySelector(".overflow-hidden");
+                const fullBlock = shortBlock
+                    ? shortBlock.nextElementSibling
+                    : null;
+
+                if (shortBlock && fullBlock) {
+                    if (text.includes("показать полностью")) {
+                        shortBlock.style.display = "none";
+                        fullBlock.style.display = "block";
+                    } else {
+                        fullBlock.style.display = "none";
+                        shortBlock.style.display = "block";
+                    }
+                }
+            });
         }
         runLoop() {
             document.querySelectorAll(".want-card").forEach((card) => {
