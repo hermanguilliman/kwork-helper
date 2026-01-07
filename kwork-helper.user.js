@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Kwork Helper
 // @namespace http://tampermonkey.net/
-// @version 1.3.1
+// @version 1.3.2
 // @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh, infinite scroll.
 // @grant GM_notification
 // @grant GM_setClipboard
@@ -97,8 +97,16 @@
     .kw-badge-neutral { background: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; }
     .kw-badge-spam { background: #f2f2f2; color: #999; border: 1px solid #e0e0e0; margin-bottom: 5px; display:inline-block; font-size: 10px; border-radius: 12px; text-transform: uppercase; padding: 2px 8px; }
     
-    .kw-border-good { border-left: 5px solid #87B448 !important; }
-    .kw-bg-bad { background-color: rgba(255, 0, 0, 0.03) !important; }
+    /* MODERN STRIPS DESIGN */
+    .kw-strip-good { 
+        border-left: 2px solid #58cf7e !important; /* Soft Mint Green */
+        background: linear-gradient(90deg, rgba(88, 207, 126, 0.08) 0%, #fff 15%) !important;
+    }
+    .kw-strip-bad { 
+        border-left: 2px solid #ff6b6b !important; /* Soft Coral Red */
+        background: linear-gradient(90deg, rgba(255, 107, 107, 0.08) 0%, #fff 15%) !important;
+    }
+
     .kw-spam-card { opacity: 0.4; filter: grayscale(100%); transition: all 0.3s; }
     .kw-spam-card:hover { opacity: 0.9; filter: grayscale(0%); }
     .kw-hidden { display: none !important; }
@@ -629,9 +637,10 @@
             const el = card.querySelector(".wants-card__price");
             if (!el) return;
             const p = parseInt(el.textContent.replace(/\D/g, ""));
-            if (p >= DEFAULTS.goodPrice) card.classList.add("kw-border-good");
+
+            if (p >= DEFAULTS.goodPrice) card.classList.add("kw-strip-good");
             else if (p <= DEFAULTS.badPrice && p > 0)
-                card.classList.add("kw-bg-bad");
+                card.classList.add("kw-strip-bad");
         }
         addCopyBtn(card) {
             const link = card.querySelector(".wants-card__header-title a");
@@ -742,6 +751,7 @@
             if (force) {
                 document.querySelectorAll(".want-card").forEach((c) => {
                     c.removeAttribute("data-kw-state");
+                    c.classList.remove("kw-strip-good", "kw-strip-bad");
                 });
             }
             document
