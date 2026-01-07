@@ -3,7 +3,11 @@
 // @namespace http://tampermonkey.net/
 // @version 1.3
 // @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh, infinite scroll.
+// @grant GM_notification
+// @grant GM_setClipboard
 // @author Herman Guilliman
+// @updateURL https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
+// @downloadURL https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
 // @match https://kwork.ru/projects*
 // @icon https://www.google.com/s2/favicons?sz=64&domain=kwork.ru
 // @copyright 2026, Herman Guilliman (hermanguilliman@proton.me)
