@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Kwork Helper
 // @namespace http://tampermonkey.net/
-// @version 1.3.5
+// @version 1.3.6
 // @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh, infinite scroll, avatar zoom.
 // @grant GM_notification
 // @grant GM_setClipboard
@@ -97,8 +97,8 @@
     .kw-badge-neutral { background: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; }
     .kw-badge-spam { background: #f2f2f2; color: #999; border: 1px solid #e0e0e0; margin-bottom: 5px; display:inline-block; font-size: 10px; border-radius: 12px; text-transform: uppercase; padding: 2px 8px; }
     
-    .kw-strip-good { border-left: 2px solid #58cf7e !important; background: linear-gradient(90deg, rgba(88, 207, 126, 0.08) 0%, #fff 15%) !important; }
-    .kw-strip-bad { border-left: 2px solid #ff6b6b !important; background: linear-gradient(90deg, rgba(255, 107, 107, 0.08) 0%, #fff 15%) !important; }
+    .kw-strip-good { border-left: 2px solid #58cf7e !important; background: linear-gradient(90deg, rgba(88, 207, 126, 0.03) 0%, #fff 15%) !important; }
+    .kw-strip-bad { border-left: 2px solid #ff6b6b !important; background: linear-gradient(90deg, rgba(255, 107, 107, 0.03) 0%, #fff 15%) !important; }
 
     .kw-spam-card { opacity: 0.4; filter: grayscale(100%); transition: all 0.3s; }
     .kw-spam-card:hover { opacity: 0.9; filter: grayscale(0%); }
@@ -280,6 +280,7 @@
                 this.app.config.keys.infiniteScroll
             );
             this.isLoading = false;
+            this.isFinished = false;
             this.page = 1;
             this.loader = null;
             this.container = null;
@@ -322,7 +323,7 @@
                 this.loader.style.display = this.isEnabled ? "none" : "none";
         }
         onScroll() {
-            if (this.isLoading) return;
+            if (this.isLoading || this.isFinished) return;
             const scrollHeight = document.documentElement.scrollHeight;
             const scrollTop =
                 window.scrollY || document.documentElement.scrollTop;
@@ -354,6 +355,21 @@
                 }
             }, 10000);
         }
+
+        getCardSignature(card) {
+            if (!card) return "";
+            const id = card.getAttribute("data-id");
+            if (id) return "ID:" + id;
+
+            const title = card.querySelector(".wants-card__header-title");
+            const price = card.querySelector(".wants-card__price");
+            return (
+                (title ? title.textContent.trim() : "") +
+                "|" +
+                (price ? price.textContent.trim() : "")
+            );
+        }
+
         onIframeLoad() {
             try {
                 const doc =
@@ -361,15 +377,36 @@
                     this.iframe.contentWindow.document;
                 setTimeout(() => {
                     const newCards = doc.querySelectorAll(".want-card");
+
                     if (newCards.length === 0) {
-                        this.loader.innerHTML = "🏁 Заказов больше нет";
+                        this.finishFeed();
                         return;
                     }
+
                     if (this.container) {
+                        const currentCards =
+                            this.container.querySelectorAll(".want-card");
+
+                        if (currentCards.length > 0 && newCards.length > 0) {
+                            const lastCurrent =
+                                currentCards[currentCards.length - 1];
+                            const lastNew = newCards[newCards.length - 1];
+
+                            const sigCurrent =
+                                this.getCardSignature(lastCurrent);
+                            const sigNew = this.getCardSignature(lastNew);
+
+                            if (sigCurrent === sigNew) {
+                                this.finishFeed();
+                                return;
+                            }
+                        }
+
                         newCards.forEach((card) => {
                             const importedCard = document.adoptNode(card);
                             this.container.appendChild(importedCard);
                         });
+
                         this.app.processor.processBatch(
                             document.querySelectorAll(".want-card")
                         );
@@ -382,9 +419,21 @@
                     this.loader.style.display = "none";
                 }, 1500);
             } catch (err) {
+                console.error(err);
                 this.loader.innerHTML = "❌ Ошибка доступа к Iframe";
                 this.isLoading = false;
                 this.loader.classList.remove("active");
+            }
+        }
+        finishFeed() {
+            this.loader.innerHTML = "🏁 Заказов больше нет";
+            this.loader.classList.add("active");
+            this.loader.style.display = "block";
+            this.isFinished = true;
+            this.isLoading = false;
+            if (this.iframe) {
+                this.iframe.remove();
+                this.iframe = null;
             }
         }
     }
@@ -677,7 +726,9 @@
             }
         }
         highlightPrice(card) {
-            const isLowPriceLabel = card.querySelector(".wants-card__review--low-price");
+            const isLowPriceLabel = card.querySelector(
+                ".wants-card__review--low-price"
+            );
             if (isLowPriceLabel) {
                 card.classList.add("kw-strip-bad");
                 return;
