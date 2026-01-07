@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name Kwork Helper
 // @namespace http://tampermonkey.net/
-// @version 1.2.1
-// @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh.
+// @version 1.3
+// @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh, infinite scroll.
 // @author Herman Guilliman
 // @match https://kwork.ru/projects*
 // @icon https://www.google.com/s2/favicons?sz=64&domain=kwork.ru
@@ -123,6 +123,9 @@
         content: ''; position: absolute; top: -3px; left: 0; right: -3px; bottom: -3px;
         border-radius: 0 8px 8px 0; border: 2px solid #87B448; animation: pulse-ring 2s infinite; pointer-events: none;
     }
+    .kw-loader { text-align: center; padding: 20px; font-size: 14px; color: #888; font-weight: bold; display: none; width: 100%; clear: both; background: #fafafa; border: 1px dashed #ccc; margin-top: 20px; }
+    .kw-loader.active { display: block; }
+
     @keyframes pulse-ring { 0% { transform: scale(1); opacity: 1; } 100% { transform: scaleX(1.1) scaleY(1.3); opacity: 0; } }
     @keyframes pulse { 0% { transform: scale(0.95); opacity: 0.7; } 50% { transform: scale(1.1); opacity: 1; } 100% { transform: scale(0.95); opacity: 0.7; } }
     `;
@@ -134,6 +137,7 @@
                 userNotes: "kw_user_notes",
                 autoRefresh: "kw_autorefresh",
                 hideSpam: "kw_hide_spam",
+                infiniteScroll: "kw_infinite_scroll",
             };
         }
         getStopWords() {
@@ -156,11 +160,8 @@
             const notes = JSON.parse(
                 localStorage.getItem(this.keys.userNotes) || "{}"
             );
-            if (text) {
-                notes[username] = text;
-            } else {
-                delete notes[username];
-            }
+            if (text) notes[username] = text;
+            else delete notes[username];
             localStorage.setItem(this.keys.userNotes, JSON.stringify(notes));
         }
         get(key) {
@@ -168,6 +169,155 @@
         }
         set(key, val) {
             localStorage.setItem(key, val);
+        }
+    }
+
+    class InfiniteScrollManager {
+        constructor(app) {
+            this.app = app;
+            this.isEnabled = this.app.config.get(
+                this.app.config.keys.infiniteScroll
+            );
+            this.isLoading = false;
+            this.page = 1;
+            this.loader = null;
+            this.container = null;
+            this.iframe = null;
+
+            setTimeout(() => this.init(), 1000);
+        }
+
+        init() {
+            const params = new URLSearchParams(window.location.search);
+            this.page = parseInt(params.get("page")) || 1;
+
+            this.loader = document.createElement("div");
+            this.loader.className = "kw-loader";
+            this.loader.innerHTML = "⏳ Загрузка заказов...";
+
+            this.container =
+                document.querySelector(".project-list") ||
+                document.querySelector(".wants-content");
+            if (this.container) {
+                const innerList = this.container.querySelector(".project-list");
+                if (innerList) this.container = innerList;
+                if (this.container.parentNode) {
+                    this.container.parentNode.insertBefore(
+                        this.loader,
+                        this.container.nextSibling
+                    );
+                }
+            }
+
+            window.addEventListener("scroll", () => {
+                if (this.isEnabled) this.onScroll();
+            });
+
+            this.updateState();
+        }
+
+        toggle(state) {
+            this.isEnabled = state;
+            this.updateState();
+        }
+
+        updateState() {
+            const pags = document.querySelectorAll(".pagination, .paging");
+            pags.forEach((el) => {
+                el.style.display = this.isEnabled ? "none" : "";
+            });
+            if (this.loader) {
+                this.loader.style.display = this.isEnabled ? "none" : "none";
+            }
+        }
+
+        onScroll() {
+            if (this.isLoading) return;
+            const scrollHeight = document.documentElement.scrollHeight;
+            const scrollTop =
+                window.scrollY || document.documentElement.scrollTop;
+            const clientHeight = document.documentElement.clientHeight;
+            if (scrollTop + clientHeight >= scrollHeight - 600) {
+                this.loadNextPage();
+            }
+        }
+
+        loadNextPage() {
+            this.isLoading = true;
+            this.loader.classList.add("active");
+            this.loader.style.display = "block";
+
+            this.page++;
+            const url = new URL(window.location.href);
+            url.searchParams.set("page", this.page);
+
+            console.log("KW Helper: Iframe Loading:", url.toString());
+
+            if (this.iframe) this.iframe.remove();
+
+            this.iframe = document.createElement("iframe");
+            this.iframe.style.display = "none";
+            this.iframe.style.width = "0";
+            this.iframe.style.height = "0";
+            this.iframe.src = url.toString();
+
+            document.body.appendChild(this.iframe);
+
+            this.iframe.onload = () => {
+                this.onIframeLoad();
+            };
+
+            setTimeout(() => {
+                if (this.isLoading) {
+                    console.log("KW Helper: Iframe timeout");
+                    this.isLoading = false;
+                    this.loader.classList.remove("active");
+                }
+            }, 10000);
+        }
+
+        onIframeLoad() {
+            try {
+                const doc =
+                    this.iframe.contentDocument ||
+                    this.iframe.contentWindow.document;
+
+                setTimeout(() => {
+                    const newCards = doc.querySelectorAll(".want-card");
+                    console.log(
+                        "KW Helper: Iframe loaded. Found cards:",
+                        newCards.length
+                    );
+
+                    if (newCards.length === 0) {
+                        this.loader.innerHTML = "🏁 Заказов больше нет";
+                        return;
+                    }
+
+                    if (this.container) {
+                        newCards.forEach((card) => {
+                            const importedCard = document.adoptNode(card);
+                            this.container.appendChild(importedCard);
+                        });
+
+                        this.app.processor.processBatch(
+                            document.querySelectorAll(".want-card")
+                        );
+                        this.loader.innerHTML = "⏳ Загрузка заказов...";
+                    }
+
+                    this.iframe.remove();
+                    this.iframe = null;
+                    this.isLoading = false;
+                    this.loader.classList.remove("active");
+                    this.loader.style.display = "none";
+                }, 1500);
+            } catch (err) {
+                console.error("KW Helper: Iframe error", err);
+                this.loader.innerHTML = "❌ Ошибка доступа к Iframe";
+                this.isLoading = false;
+                this.loader.classList.remove("active");
+            }
         }
     }
 
@@ -181,14 +331,21 @@
             document.head.appendChild(style);
         }
         renderPanel() {
-            if (document.getElementById("kw_panel")) {
-                return;
-            }
+            if (document.getElementById("kw_panel")) return;
             const div = document.createElement("div");
             div.id = "kw_panel";
-            const isAuto = this.app.config.get(
-                this.app.config.keys.autoRefresh
+
+            let isAuto = this.app.config.get(this.app.config.keys.autoRefresh);
+            let isInf = this.app.config.get(
+                this.app.config.keys.infiniteScroll
             );
+
+            if (isAuto && isInf) {
+                isInf = false;
+                this.app.config.set(this.app.config.keys.infiniteScroll, false);
+                this.app.infinite.toggle(false);
+            }
+
             const isHide = this.app.config.get(this.app.config.keys.hideSpam);
 
             div.innerHTML = `
@@ -202,6 +359,9 @@
                     <div class="kw-opt-row"><span>Скрывать спам</span><label class="kw-switch"><input type="checkbox" id="kw_inp_spam" ${
                         isHide ? "checked" : ""
                     }><span class="kw-slider"></span></label></div>
+                    <div class="kw-opt-row"><span>Бесконечная лента</span><label class="kw-switch"><input type="checkbox" id="kw_inp_inf" ${
+                        isInf ? "checked" : ""
+                    }><span class="kw-slider"></span></label></div>
                     <div id="kw_timer_txt" class="kw-timer-status" style="display: ${
                         isAuto ? "block" : "none"
                     }">Обновление: ${this.timeLeft}с</div>
@@ -212,38 +372,69 @@
             this.bindEvents();
             this.updateTimerUI();
         }
+
         bindEvents() {
             const fab = document.getElementById("kw_fab_btn");
-            fab.addEventListener("click", () => {
-                this.panel.classList.toggle("open");
-            });
+            const autoInp = document.getElementById("kw_inp_auto");
+            const infInp = document.getElementById("kw_inp_inf");
+            const spamInp = document.getElementById("kw_inp_spam");
+
+            fab.addEventListener("click", () =>
+                this.panel.classList.toggle("open")
+            );
             document.addEventListener("click", (e) => {
-                if (!this.panel.contains(e.target)) {
+                if (!this.panel.contains(e.target))
                     this.panel.classList.remove("open");
+            });
+
+            autoInp.addEventListener("change", (e) => {
+                const isEnabled = e.target.checked;
+                this.app.config.set(
+                    this.app.config.keys.autoRefresh,
+                    isEnabled
+                );
+
+                if (isEnabled) {
+                    infInp.checked = false;
+                    this.app.config.set(
+                        this.app.config.keys.infiniteScroll,
+                        false
+                    );
+                    this.app.infinite.toggle(false);
+
+                    this.timeLeft = DEFAULTS.refreshTime;
+                    window.location.reload();
+                } else {
+                    this.updateTimerUI();
                 }
             });
-            document
-                .getElementById("kw_inp_auto")
-                .addEventListener("change", (e) => {
+
+            infInp.addEventListener("change", (e) => {
+                const isEnabled = e.target.checked;
+                this.app.config.set(
+                    this.app.config.keys.infiniteScroll,
+                    isEnabled
+                );
+                this.app.infinite.toggle(isEnabled);
+
+                if (isEnabled) {
+                    autoInp.checked = false;
                     this.app.config.set(
                         this.app.config.keys.autoRefresh,
-                        e.target.checked
+                        false
                     );
-                    this.timeLeft = DEFAULTS.refreshTime;
                     this.updateTimerUI();
-                    if (e.target.checked) {
-                        window.location.reload();
-                    }
-                });
-            document
-                .getElementById("kw_inp_spam")
-                .addEventListener("change", (e) => {
-                    this.app.config.set(
-                        this.app.config.keys.hideSpam,
-                        e.target.checked
-                    );
-                    this.app.processor.toggleSpam(e.target.checked);
-                });
+                }
+            });
+
+            spamInp.addEventListener("change", (e) => {
+                this.app.config.set(
+                    this.app.config.keys.hideSpam,
+                    e.target.checked
+                );
+                this.app.processor.toggleSpam(e.target.checked);
+            });
+
             document
                 .getElementById("kw_btn_settings")
                 .addEventListener("click", () => {
@@ -251,6 +442,7 @@
                     this.openSettings();
                 });
         }
+
         updateTimerUI() {
             const isAuto = this.app.config.get(
                 this.app.config.keys.autoRefresh
@@ -265,15 +457,12 @@
                 }
             } else {
                 fab.classList.remove("kw-pulse-ring");
-                if (txt) {
-                    txt.style.display = "none";
-                }
+                if (txt) txt.style.display = "none";
             }
         }
         openSettings() {
-            if (document.querySelector(".kw-overlay")) {
+            if (document.querySelector(".kw-overlay"))
                 document.querySelector(".kw-overlay").remove();
-            }
             const modalHtml = `<div class="kw-overlay open" id="kw_settings"><div class="kw-modal"><div class="kw-modal-title"><span>Фильтр стоп-слов</span><span class="kw-modal-close" id="kw_modal_close">✕</span></div><div class="kw-input-group"><input type="text" class="kw-input" id="kw_word_inp" placeholder="Фраза (Enter)..."><button class="kw-btn" id="kw_word_add">+</button></div><div class="kw-tags" id="kw_tags_container"></div></div></div>`;
             document.body.insertAdjacentHTML("beforeend", modalHtml);
             const render = () => {
@@ -301,9 +490,7 @@
                     .getElementById("kw_word_inp")
                     .value.trim()
                     .toLowerCase();
-                if (!val) {
-                    return;
-                }
+                if (!val) return;
                 const words = this.app.config.getStopWords();
                 if (!words.includes(val)) {
                     words.push(val);
@@ -317,9 +504,7 @@
                 document.querySelector(".kw-overlay").remove();
             document.getElementById("kw_word_add").onclick = add;
             document.getElementById("kw_word_inp").onkeypress = (e) => {
-                if (e.key === "Enter") {
-                    add();
-                }
+                if (e.key === "Enter") add();
             };
             render();
             document.getElementById("kw_word_inp").focus();
@@ -330,6 +515,9 @@
         constructor(app) {
             this.app = app;
         }
+        processBatch(nodeList) {
+            nodeList.forEach((card) => this.process(card));
+        }
         process(card) {
             const processed = card.getAttribute("data-kw-state");
             const textContent = (card.innerText || "").toLowerCase();
@@ -337,30 +525,25 @@
             let isSpam = false;
             if (stopWords.some((w) => textContent.includes(w))) {
                 isSpam = true;
-                if (processed !== "spam") {
-                    this.markAsSpam(card);
-                }
+                if (processed !== "spam") this.markAsSpam(card);
             }
             if (
                 !processed &&
                 DEFAULTS.urgentWords.some((w) => textContent.includes(w))
             ) {
                 const title = card.querySelector(".wants-card__header-title");
-                if (title && !title.querySelector(".kw-urgent-fire")) {
+                if (title && !title.querySelector(".kw-urgent-fire"))
                     title.insertAdjacentHTML(
                         "afterbegin",
                         '<span class="kw-urgent-fire" title="Срочно!">🔥</span>'
                     );
-                }
             }
             this.forceReplaceStats(card);
             if (!processed) {
                 this.highlightPrice(card);
                 this.addCopyBtn(card);
                 this.setupUserNotes(card);
-                if (!isSpam) {
-                    card.setAttribute("data-kw-state", "active");
-                }
+                if (!isSpam) card.setAttribute("data-kw-state", "active");
             }
         }
         markAsSpam(card) {
@@ -368,31 +551,24 @@
             const header = card.querySelector(
                 ".wants-card__header-right-block"
             );
-            if (header && !card.querySelector(".kw-badge-spam")) {
+            if (header && !card.querySelector(".kw-badge-spam"))
                 header.insertAdjacentHTML(
                     "afterbegin",
                     '<div class="kw-badge kw-badge-spam">spam</div>'
                 );
-            }
-            if (this.app.config.get(this.app.config.keys.hideSpam)) {
+            if (this.app.config.get(this.app.config.keys.hideSpam))
                 card.classList.add("kw-hidden");
-            }
             card.setAttribute("data-kw-state", "spam");
         }
         toggleSpam(hide) {
             document.querySelectorAll(".kw-spam-card").forEach((c) => {
-                if (hide) {
-                    c.classList.add("kw-hidden");
-                } else {
-                    c.classList.remove("kw-hidden");
-                }
+                if (hide) c.classList.add("kw-hidden");
+                else c.classList.remove("kw-hidden");
             });
         }
         forceReplaceStats(card) {
             const statsBlock = card.querySelector(".want-payer-statistic");
-            if (!statsBlock || statsBlock.querySelector(".kw-badge")) {
-                return;
-            }
+            if (!statsBlock || statsBlock.querySelector(".kw-badge")) return;
             let textNode = null;
             const walker = document.createTreeWalker(
                 statsBlock,
@@ -431,13 +607,8 @@
                 span.innerHTML = badgeHTML;
                 textNode.parentNode.replaceChild(span, textNode);
                 let next = span.nextSibling;
-                if (
-                    next &&
-                    next.textContent &&
-                    next.textContent.includes("%")
-                ) {
+                if (next && next.textContent && next.textContent.includes("%"))
                     next.remove();
-                }
             } else {
                 const container = statsBlock.querySelector(
                     ".dib.v-align-t:last-child"
@@ -452,21 +623,15 @@
         }
         highlightPrice(card) {
             const el = card.querySelector(".wants-card__price");
-            if (!el) {
-                return;
-            }
+            if (!el) return;
             const p = parseInt(el.textContent.replace(/\D/g, ""));
-            if (p >= DEFAULTS.goodPrice) {
-                card.classList.add("kw-border-good");
-            } else if (p <= DEFAULTS.badPrice && p > 0) {
+            if (p >= DEFAULTS.goodPrice) card.classList.add("kw-border-good");
+            else if (p <= DEFAULTS.badPrice && p > 0)
                 card.classList.add("kw-bg-bad");
-            }
         }
         addCopyBtn(card) {
             const link = card.querySelector(".wants-card__header-title a");
-            if (!link) {
-                return;
-            }
+            if (!link) return;
             const btn = document.createElement("button");
             btn.className = "kw-copy-btn";
             btn.innerHTML = "❐";
@@ -484,9 +649,7 @@
             const link = card.querySelector(
                 '.want-payer-statistic a[href*="/user/"]'
             );
-            if (!link) {
-                return;
-            }
+            if (!link) return;
             const username = link.textContent.trim();
             const note = this.app.config.getUserNote(username);
             const icon = document.createElement("span");
@@ -515,15 +678,14 @@
         constructor() {
             this.config = new ConfigManager();
             this.processor = new CardProcessor(this);
+            this.infinite = new InfiniteScrollManager(this);
             this.ui = new UIManager(this);
         }
         init() {
             this.ui.renderPanel();
             this.runLoop();
             new MutationObserver((ms) => {
-                if (ms.some((m) => m.addedNodes.length)) {
-                    this.runLoop();
-                }
+                if (ms.some((m) => m.addedNodes.length)) this.runLoop();
             }).observe(
                 document.querySelector(".wants-content") || document.body,
                 { childList: true, subtree: true }
@@ -544,20 +706,14 @@
             }
             document
                 .querySelectorAll(".kw-note-icon, .kw-note-text")
-                .forEach((n) => {
-                    n.remove();
-                });
+                .forEach((n) => n.remove());
             this.runLoop();
         }
         tick() {
-            if (!this.config.get(this.config.keys.autoRefresh)) {
-                return;
-            }
+            if (!this.config.get(this.config.keys.autoRefresh)) return;
             this.ui.timeLeft--;
             this.ui.updateTimerUI();
-            if (this.ui.timeLeft <= 0) {
-                window.location.reload();
-            }
+            if (this.ui.timeLeft <= 0) window.location.reload();
         }
     }
 
