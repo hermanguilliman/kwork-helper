@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Kwork Helper
 // @namespace http://tampermonkey.net/
-// @version 1.3.3
+// @version 1.3.4
 // @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh, infinite scroll, avatar zoom.
 // @grant GM_notification
 // @grant GM_setClipboard
@@ -206,27 +206,38 @@
             document.body.appendChild(this.popup);
         }
 
-        bind(imgElement) {
-            if (imgElement.dataset.kwZoomBound) return;
-            imgElement.dataset.kwZoomBound = "true";
-
-            imgElement.addEventListener("mouseenter", (e) => {
-                this.timer = setTimeout(() => {
-                    this.show(imgElement);
-                }, 2000);
+        init() {
+            document.addEventListener("mouseover", (e) => {
+                if (
+                    e.target &&
+                    e.target.classList &&
+                    e.target.classList.contains("user-avatar__picture")
+                ) {
+                    this.timer = setTimeout(() => {
+                        this.show(e.target);
+                    }, 2000);
+                }
             });
 
-            imgElement.addEventListener("mouseleave", () => {
-                if (this.timer) clearTimeout(this.timer);
-                this.hide();
+            document.addEventListener("mouseout", (e) => {
+                if (
+                    e.target &&
+                    e.target.classList &&
+                    e.target.classList.contains("user-avatar__picture")
+                ) {
+                    if (this.timer) clearTimeout(this.timer);
+                    this.hide();
+                }
             });
 
-            imgElement.addEventListener("click", () => this.hide());
+            window.addEventListener("scroll", () => this.hide());
+            document.addEventListener("click", () => this.hide());
         }
 
         show(imgElement) {
             const src = imgElement.src || imgElement.getAttribute("srcset");
             if (!src) return;
+
             const url = src.split(" ")[0];
             const bigUrl = url.replace(
                 /\/files\/avatar\/(big|big_r)\//,
@@ -252,11 +263,13 @@
 
         hide() {
             if (this.timer) clearTimeout(this.timer);
-            this.popup.classList.remove("show");
-            setTimeout(() => {
-                if (!this.popup.classList.contains("show"))
-                    this.popup.querySelector("img").src = "";
-            }, 300);
+            if (this.popup && this.popup.classList.contains("show")) {
+                this.popup.classList.remove("show");
+                setTimeout(() => {
+                    if (!this.popup.classList.contains("show"))
+                        this.popup.querySelector("img").src = "";
+                }, 300);
+            }
         }
     }
 
@@ -565,11 +578,6 @@
             const stopWords = this.app.config.getStopWords();
             let isSpam = false;
 
-            const avatarImg = card.querySelector(".user-avatar__picture");
-            if (avatarImg) {
-                this.app.avatarManager.bind(avatarImg);
-            }
-
             if (stopWords.some((w) => textContent.includes(w))) {
                 isSpam = true;
                 if (processed !== "spam") this.markAsSpam(card);
@@ -731,6 +739,7 @@
         }
         init() {
             this.ui.renderPanel();
+            this.avatarManager.init();
             this.fixExpandButtons();
             this.runLoop();
             new MutationObserver((ms) => {
