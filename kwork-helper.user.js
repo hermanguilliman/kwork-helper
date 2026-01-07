@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Kwork Helper
 // @namespace http://tampermonkey.net/
-// @version 1.3.4
+// @version 1.3.5
 // @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh, infinite scroll, avatar zoom.
 // @grant GM_notification
 // @grant GM_setClipboard
@@ -677,6 +677,11 @@
             }
         }
         highlightPrice(card) {
+            const isLowPriceLabel = card.querySelector(".wants-card__review--low-price");
+            if (isLowPriceLabel) {
+                card.classList.add("kw-strip-bad");
+                return;
+            }
             const el = card.querySelector(".wants-card__price");
             if (!el) return;
             const p = parseInt(el.textContent.replace(/\D/g, ""));
