@@ -1,16 +1,17 @@
 // ==UserScript==
-// @name Kwork Helper
-// @namespace http://tampermonkey.net/
-// @version 1.3.6
-// @description Optimization of the Kwork exchange: stats replacement, spam filter, auto-refresh, infinite scroll, avatar zoom.
-// @grant GM_notification
-// @grant GM_setClipboard
-// @author Herman Guilliman
-// @updateURL https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
-// @downloadURL https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
-// @match https://kwork.ru/projects*
-// @icon https://www.google.com/s2/favicons?sz=64&domain=kwork.ru
-// @copyright 2026, Herman Guilliman (hermanguilliman@proton.me)
+// @name         Kwork Helper
+// @namespace    http://tampermonkey.net/
+// @version      2.0.0
+// @description  Optimization of Kwork: stats, spam filter, infinite scroll, and AI integration for fast order analysis.
+// @author       Herman Guilliman
+// @updateURL    https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
+// @downloadURL  https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
+// @match        https://kwork.ru/projects*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=kwork.ru
+// @grant        GM_notification
+// @grant        GM_xmlhttpRequest
+// @connect      *
+// @copyright    2026, Herman Guilliman (hermanguilliman@proton.me)
 // ==/UserScript==
 
 (function () {
@@ -22,6 +23,10 @@
         goodHireRate: 40,
         badHireRate: 20,
         refreshTime: 60,
+        aiBaseUrl: "https://api.openai.com/v1",
+        aiModel: "gpt-4o-mini",
+        aiPrompt:
+            "Ты опытный фрилансер. Проанализируй этот заказ. 1. Насколько адекватна цена за такой объем? 2. Есть ли подводные камни? 3. Стоит ли откликаться? Ответь кратко.",
         stopWords: [
             "за отзыв",
             "ради отзыва",
@@ -46,6 +51,7 @@
     };
 
     const CSS = `
+    /* CORE PANEL & UI */
     #kw_panel {
         position: fixed; top: 40%; left: 0;
         z-index: 999990; font-family: 'Roboto', sans-serif;
@@ -82,6 +88,8 @@
     .kw-btn-icon:hover { color: #333; }
     .kw-body { padding: 15px; }
     .kw-opt-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #555; margin-bottom: 12px; }
+    
+    /* SWITCHES & SLIDERS */
     .kw-switch { position: relative; width: 36px; height: 20px; }
     .kw-switch input { opacity: 0; width: 0; height: 0; }
     .kw-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #e0e0e0; transition: .3s; border-radius: 34px; }
@@ -90,40 +98,58 @@
     input:checked + .kw-slider:before { transform: translateX(16px); }
     .kw-timer-status { font-size: 11px; color: #87B448; text-align: center; margin-top: 10px; font-weight: 600; background: #f0f7e6; padding: 4px; border-radius: 4px; }
     
+    /* BADGES & STRIPS */
     .kw-badge { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; margin: 0 4px; }
     .kw-badge-good { background: #e6f9ed; color: #27ae60; border: 1px solid #c3e6cb; }
     .kw-badge-bad { background: #fdeaea; color: #e74c3c; border: 1px solid #f5c6cb; }
     .kw-badge-mid { background: #fff8e1; color: #f39c12; border: 1px solid #ffeeba; }
     .kw-badge-neutral { background: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; }
     .kw-badge-spam { background: #f2f2f2; color: #999; border: 1px solid #e0e0e0; margin-bottom: 5px; display:inline-block; font-size: 10px; border-radius: 12px; text-transform: uppercase; padding: 2px 8px; }
-    
     .kw-strip-good { border-left: 2px solid #58cf7e !important; background: linear-gradient(90deg, rgba(88, 207, 126, 0.03) 0%, #fff 15%) !important; }
     .kw-strip-bad { border-left: 2px solid #ff6b6b !important; background: linear-gradient(90deg, rgba(255, 107, 107, 0.03) 0%, #fff 15%) !important; }
-
     .kw-spam-card { opacity: 0.4; filter: grayscale(100%); transition: all 0.3s; }
     .kw-spam-card:hover { opacity: 0.9; filter: grayscale(0%); }
     .kw-hidden { display: none !important; }
-    .kw-urgent-fire { font-size: 14px; margin-right: 5px; animation: pulse 1.5s infinite; cursor: help; }
-    .kw-copy-btn { cursor: pointer; margin-left: 8px; opacity: 0.3; font-size: 14px; background: none; border: none; padding: 0; }
-    .kw-copy-btn:hover { opacity: 1; color: #007bff; }
-    .kw-note-icon { cursor: pointer; margin-left: 5px; font-size: 12px; opacity: 0.3; transition: opacity 0.2s; }
-    .kw-note-icon:hover, .kw-note-icon.has-note { opacity: 1; }
-    .kw-note-text { display: block; font-size: 11px; color: #666; background: #fff8dc; padding: 3px 8px; border-radius: 6px; margin-top: 4px; border: 1px solid #eee; }
     
+    /* ICONS & UTILS */
+    .kw-urgent-fire { font-size: 14px; margin-right: 5px; animation: pulse 1.5s infinite; cursor: help; }
+    
+    /* MODAL SETTINGS */
     .kw-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999995; display: flex; align-items: center; justify-content: center; opacity: 0; visibility: hidden; transition: 0.2s; }
     .kw-overlay.open { opacity: 1; visibility: visible; }
-    .kw-modal { background: #fff; width: 450px; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); transform: translateY(20px); transition: 0.3s; }
+    .kw-modal { background: #fff; width: 500px; max-height: 90vh; overflow-y: auto; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); transform: translateY(20px); transition: 0.3s; }
     .kw-overlay.open .kw-modal { transform: translateY(0); }
-    .kw-modal-title { font-size: 18px; font-weight: bold; margin-bottom: 15px; color: #333; display:flex; justify-content:space-between; }
+    .kw-modal-title { font-size: 18px; font-weight: bold; margin-bottom: 20px; color: #333; display:flex; justify-content:space-between; border-bottom: 1px solid #eee; padding-bottom: 10px;}
     .kw-modal-close { cursor: pointer; color: #999; }
-    .kw-input-group { display: flex; gap: 10px; margin-bottom: 15px; }
-    .kw-input { flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; outline: none; transition: 0.2s; }
+    .kw-section-title { font-size: 14px; font-weight: 700; color: #555; margin: 15px 0 10px; display: block; }
+    .kw-input-group { display: flex; gap: 10px; margin-bottom: 10px; }
+    .kw-input { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; outline: none; transition: 0.2s; font-size: 13px; width: 100%; box-sizing: border-box; }
     .kw-input:focus { border-color: #87B448; }
-    .kw-btn { background: #87B448; color: #fff; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; transition: 0.2s; }
-    .kw-tags { display: flex; flex-wrap: wrap; gap: 6px; max-height: 250px; overflow-y: auto; padding: 10px; background: #f9f9f9; border-radius: 8px; border: 1px solid #eee; margin-top: 15px; }
+    .kw-textarea { width: 100%; height: 80px; resize: vertical; font-family: sans-serif; }
+    .kw-btn { background: #87B448; color: #fff; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; transition: 0.2s; font-size: 13px; }
+    .kw-btn:hover { background: #609438; }
+    .kw-btn-save { width: 100%; margin-top: 20px; padding: 12px; font-size: 14px; }
+    .kw-tags { display: flex; flex-wrap: wrap; gap: 6px; max-height: 100px; overflow-y: auto; padding: 10px; background: #f9f9f9; border-radius: 8px; border: 1px solid #eee; }
     .kw-tag { background: #fff; border: 1px solid #ddd; padding: 5px 12px; border-radius: 20px; font-size: 12px; color: #555; display: flex; align-items: center; gap: 6px; }
     .kw-tag-rm { cursor: pointer; color: #ff4757; font-weight: bold; }
     
+    /* AI & BUTTONS */
+    .kw-ai-btn { 
+        cursor: pointer; margin-left: 8px; font-size: 16px; background: none; border: none; padding: 0; 
+        transition: transform 0.2s; filter: grayscale(100%); opacity: 0.6;
+    }
+    .kw-ai-btn:hover { transform: scale(1.2); filter: grayscale(0%); opacity: 1; }
+    .kw-ai-btn.loading { animation: spin 1s infinite linear; pointer-events: none; }
+    .kw-ai-response-box {
+        margin-top: 12px; padding: 12px; border-radius: 8px; 
+        background: #f4f8fb; border: 1px solid #dcebf7; color: #2c3e50; font-size: 13px;
+        line-height: 1.5; white-space: pre-wrap; position: relative;
+    }
+    .kw-ai-response-box::before { content: "🤖 Неройсеть:"; display: block; font-weight: bold; color: #3498db; margin-bottom: 6px; }
+    .kw-ai-error { background: #fff5f5; border-color: #ffcccc; color: #c0392b; }
+    .kw-ai-error::before { content: "❌ Ошибка:"; color: #c0392b; }
+
+    /* LOADERS & ANIMATIONS */
     .kw-pulse-ring::after {
         content: ''; position: absolute; top: -3px; left: 0; right: -3px; bottom: -3px;
         border-radius: 0 8px 8px 0; border: 2px solid #87B448; animation: pulse-ring 2s infinite; pointer-events: none;
@@ -131,35 +157,37 @@
     .kw-loader { text-align: center; padding: 20px; font-size: 14px; color: #888; font-weight: bold; display: none; width: 100%; clear: both; background: #fafafa; border: 1px dashed #ccc; margin-top: 20px; }
     .kw-loader.active { display: block; }
 
-    /* AVATAR ZOOM CSS */
-    .kw-avatar-large-popup {
-        position: fixed; z-index: 999999;
-        width: 150px; height: 150px;
-        background: #fff; border-radius: 12px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        border: 4px solid #fff;
-        overflow: hidden; pointer-events: none;
-        opacity: 0; visibility: hidden;
-        transform: scale(0.8);
-        transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    }
-    .kw-avatar-large-popup.show { opacity: 1; visibility: visible; transform: scale(1); }
-    .kw-avatar-large-popup img { width: 100%; height: 100%; object-fit: cover; }
-
     @keyframes pulse-ring { 0% { transform: scale(1); opacity: 1; } 100% { transform: scaleX(1.1) scaleY(1.3); opacity: 0; } }
     @keyframes pulse { 0% { transform: scale(0.95); opacity: 0.7; } 50% { transform: scale(1.1); opacity: 1; } 100% { transform: scale(0.95); opacity: 0.7; } }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
     `;
 
     class ConfigManager {
         constructor() {
             this.keys = {
                 stopWords: "kw_stop_words",
-                userNotes: "kw_user_notes",
                 autoRefresh: "kw_autorefresh",
                 hideSpam: "kw_hide_spam",
                 infiniteScroll: "kw_infinite_scroll",
+                aiBaseUrl: "kw_ai_base_url",
+                aiApiKey: "kw_ai_api_key",
+                aiModel: "kw_ai_model",
+                aiPrompt: "kw_ai_prompt",
             };
         }
+        get(key) {
+            return localStorage.getItem(key) === "true";
+        }
+        set(key, val) {
+            localStorage.setItem(key, val);
+        }
+        getString(key, defaultVal) {
+            return localStorage.getItem(key) || defaultVal;
+        }
+        setString(key, val) {
+            localStorage.setItem(key, val);
+        }
+
         getStopWords() {
             return (
                 JSON.parse(localStorage.getItem(this.keys.stopWords)) ||
@@ -169,107 +197,82 @@
         setStopWords(words) {
             localStorage.setItem(this.keys.stopWords, JSON.stringify(words));
         }
-        getUserNote(username) {
-            return (
-                JSON.parse(localStorage.getItem(this.keys.userNotes) || "{}")[
-                    username
-                ] || null
-            );
+
+        getAiConfig() {
+            return {
+                baseUrl: this.getString(
+                    this.keys.aiBaseUrl,
+                    DEFAULTS.aiBaseUrl,
+                ),
+                apiKey: this.getString(this.keys.aiApiKey, ""),
+                model: this.getString(this.keys.aiModel, DEFAULTS.aiModel),
+                prompt: this.getString(this.keys.aiPrompt, DEFAULTS.aiPrompt),
+            };
         }
-        setUserNote(username, text) {
-            const notes = JSON.parse(
-                localStorage.getItem(this.keys.userNotes) || "{}"
-            );
-            if (text) notes[username] = text;
-            else delete notes[username];
-            localStorage.setItem(this.keys.userNotes, JSON.stringify(notes));
-        }
-        get(key) {
-            return localStorage.getItem(key) === "true";
-        }
-        set(key, val) {
-            localStorage.setItem(key, val);
+        setAiConfig(cfg) {
+            this.setString(this.keys.aiBaseUrl, cfg.baseUrl);
+            this.setString(this.keys.aiApiKey, cfg.apiKey);
+            this.setString(this.keys.aiModel, cfg.model);
+            this.setString(this.keys.aiPrompt, cfg.prompt);
         }
     }
 
-    class AvatarManager {
-        constructor() {
-            this.popup = null;
-            this.timer = null;
-            this.createPopup();
+    class AiClient {
+        constructor(configManager) {
+            this.config = configManager;
         }
 
-        createPopup() {
-            this.popup = document.createElement("div");
-            this.popup.className = "kw-avatar-large-popup";
-            this.popup.innerHTML = `<img src="" alt="">`;
-            document.body.appendChild(this.popup);
-        }
-
-        init() {
-            document.addEventListener("mouseover", (e) => {
-                if (
-                    e.target &&
-                    e.target.classList &&
-                    e.target.classList.contains("user-avatar__picture")
-                ) {
-                    this.timer = setTimeout(() => {
-                        this.show(e.target);
-                    }, 2000);
-                }
-            });
-
-            document.addEventListener("mouseout", (e) => {
-                if (
-                    e.target &&
-                    e.target.classList &&
-                    e.target.classList.contains("user-avatar__picture")
-                ) {
-                    if (this.timer) clearTimeout(this.timer);
-                    this.hide();
-                }
-            });
-
-            window.addEventListener("scroll", () => this.hide());
-            document.addEventListener("click", () => this.hide());
-        }
-
-        show(imgElement) {
-            const src = imgElement.src || imgElement.getAttribute("srcset");
-            if (!src) return;
-
-            const url = src.split(" ")[0];
-            const bigUrl = url.replace(
-                /\/files\/avatar\/(big|big_r)\//,
-                "/files/avatar/large_r/"
-            );
-
-            const rect = imgElement.getBoundingClientRect();
-            const popupSize = 150;
-
-            let top = rect.top + rect.height / 2 - popupSize / 2;
-            let left = rect.left + rect.width + 10;
-
-            if (top < 10) top = 10;
-            if (left + popupSize > window.innerWidth) {
-                left = rect.left - popupSize - 10;
+        async analyze(jobText, onSuccess, onError) {
+            const cfg = this.config.getAiConfig();
+            if (!cfg.apiKey) {
+                onError("Не задан API Key в настройках!");
+                return;
             }
 
-            this.popup.querySelector("img").src = bigUrl;
-            this.popup.style.top = top + "px";
-            this.popup.style.left = left + "px";
-            this.popup.classList.add("show");
-        }
+            const messages = [
+                { role: "system", content: cfg.prompt },
+                { role: "user", content: `ДЕТАЛИ ЗАКАЗА:\n${jobText}` },
+            ];
 
-        hide() {
-            if (this.timer) clearTimeout(this.timer);
-            if (this.popup && this.popup.classList.contains("show")) {
-                this.popup.classList.remove("show");
-                setTimeout(() => {
-                    if (!this.popup.classList.contains("show"))
-                        this.popup.querySelector("img").src = "";
-                }, 300);
-            }
+            const payload = {
+                model: cfg.model,
+                messages: messages,
+                temperature: 0.7,
+            };
+
+            GM_xmlhttpRequest({
+                method: "POST",
+                url:
+                    cfg.baseUrl +
+                    (cfg.baseUrl.endsWith("/") ? "" : "/") +
+                    "chat/completions",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${cfg.apiKey}`,
+                },
+                data: JSON.stringify(payload),
+                onload: (response) => {
+                    try {
+                        if (response.status !== 200) {
+                            throw new Error(
+                                `Status ${response.status}: ${response.responseText}`,
+                            );
+                        }
+                        const data = JSON.parse(response.responseText);
+                        const content =
+                            data.choices?.[0]?.message?.content ||
+                            "Пустой ответ от нейросети.";
+                        onSuccess(content);
+                    } catch (e) {
+                        onError(`Ошибка парсинга: ${e.message}`);
+                    }
+                },
+                onerror: (err) => {
+                    onError(
+                        `Ошибка сети: ${err.statusText || "Unknown error"}`,
+                    );
+                },
+            });
         }
     }
 
@@ -277,7 +280,7 @@
         constructor(app) {
             this.app = app;
             this.isEnabled = this.app.config.get(
-                this.app.config.keys.infiniteScroll
+                this.app.config.keys.infiniteScroll,
             );
             this.isLoading = false;
             this.isFinished = false;
@@ -302,7 +305,7 @@
                 if (this.container.parentNode)
                     this.container.parentNode.insertBefore(
                         this.loader,
-                        this.container.nextSibling
+                        this.container.nextSibling,
                     );
             }
             window.addEventListener("scroll", () => {
@@ -341,8 +344,6 @@
             if (this.iframe) this.iframe.remove();
             this.iframe = document.createElement("iframe");
             this.iframe.style.display = "none";
-            this.iframe.style.width = "0";
-            this.iframe.style.height = "0";
             this.iframe.src = url.toString();
             document.body.appendChild(this.iframe);
             this.iframe.onload = () => {
@@ -355,12 +356,10 @@
                 }
             }, 10000);
         }
-
         getCardSignature(card) {
             if (!card) return "";
             const id = card.getAttribute("data-id");
             if (id) return "ID:" + id;
-
             const title = card.querySelector(".wants-card__header-title");
             const price = card.querySelector(".wants-card__price");
             return (
@@ -369,7 +368,6 @@
                 (price ? price.textContent.trim() : "")
             );
         }
-
         onIframeLoad() {
             try {
                 const doc =
@@ -377,38 +375,35 @@
                     this.iframe.contentWindow.document;
                 setTimeout(() => {
                     const newCards = doc.querySelectorAll(".want-card");
-
                     if (newCards.length === 0) {
                         this.finishFeed();
                         return;
                     }
-
                     if (this.container) {
                         const currentCards =
                             this.container.querySelectorAll(".want-card");
-
                         if (currentCards.length > 0 && newCards.length > 0) {
                             const lastCurrent =
                                 currentCards[currentCards.length - 1];
                             const lastNew = newCards[newCards.length - 1];
-
-                            const sigCurrent =
-                                this.getCardSignature(lastCurrent);
-                            const sigNew = this.getCardSignature(lastNew);
-
-                            if (sigCurrent === sigNew) {
+                            if (
+                                this.getCardSignature(lastCurrent) ===
+                                this.getCardSignature(lastNew)
+                            ) {
                                 this.finishFeed();
                                 return;
                             }
                         }
-
                         newCards.forEach((card) => {
                             const importedCard = document.adoptNode(card);
+                            importedCard.removeAttribute("data-kw-state");
+                            const oldAi =
+                                importedCard.querySelector(".kw-ai-btn");
+                            if (oldAi) oldAi.remove();
                             this.container.appendChild(importedCard);
                         });
-
                         this.app.processor.processBatch(
-                            document.querySelectorAll(".want-card")
+                            document.querySelectorAll(".want-card"),
                         );
                         this.loader.innerHTML = "⏳ Загрузка заказов...";
                     }
@@ -420,7 +415,6 @@
                 }, 1500);
             } catch (err) {
                 console.error(err);
-                this.loader.innerHTML = "❌ Ошибка доступа к Iframe";
                 this.isLoading = false;
                 this.loader.classList.remove("active");
             }
@@ -453,7 +447,7 @@
             div.id = "kw_panel";
             let isAuto = this.app.config.get(this.app.config.keys.autoRefresh);
             let isInf = this.app.config.get(
-                this.app.config.keys.infiniteScroll
+                this.app.config.keys.infiniteScroll,
             );
             if (isAuto && isInf) {
                 isInf = false;
@@ -464,20 +458,12 @@
             div.innerHTML = `
             <div class="kw-fab" id="kw_fab_btn">KH</div>
             <div class="kw-menu">
-                <div class="kw-head"><span class="kw-title">Kwork Helper</span><span class="kw-btn-icon" id="kw_btn_settings">⚙️</span></div>
+                <div class="kw-head"><span class="kw-title">Kwork Helper 2.0</span><span class="kw-btn-icon" id="kw_btn_settings">⚙️</span></div>
                 <div class="kw-body">
-                    <div class="kw-opt-row"><span>Авто-обновление</span><label class="kw-switch"><input type="checkbox" id="kw_inp_auto" ${
-                        isAuto ? "checked" : ""
-                    }><span class="kw-slider"></span></label></div>
-                    <div class="kw-opt-row"><span>Скрывать спам</span><label class="kw-switch"><input type="checkbox" id="kw_inp_spam" ${
-                        isHide ? "checked" : ""
-                    }><span class="kw-slider"></span></label></div>
-                    <div class="kw-opt-row"><span>Бесконечная лента</span><label class="kw-switch"><input type="checkbox" id="kw_inp_inf" ${
-                        isInf ? "checked" : ""
-                    }><span class="kw-slider"></span></label></div>
-                    <div id="kw_timer_txt" class="kw-timer-status" style="display: ${
-                        isAuto ? "block" : "none"
-                    }">Обновление: ${this.timeLeft}с</div>
+                    <div class="kw-opt-row"><span>Авто-обновление</span><label class="kw-switch"><input type="checkbox" id="kw_inp_auto" ${isAuto ? "checked" : ""}><span class="kw-slider"></span></label></div>
+                    <div class="kw-opt-row"><span>Скрывать спам</span><label class="kw-switch"><input type="checkbox" id="kw_inp_spam" ${isHide ? "checked" : ""}><span class="kw-slider"></span></label></div>
+                    <div class="kw-opt-row"><span>Бесконечная лента</span><label class="kw-switch"><input type="checkbox" id="kw_inp_inf" ${isInf ? "checked" : ""}><span class="kw-slider"></span></label></div>
+                    <div id="kw_timer_txt" class="kw-timer-status" style="display: ${isAuto ? "block" : "none"}">Обновление: ${this.timeLeft}с</div>
                 </div>
             </div>`;
             document.body.appendChild(div);
@@ -491,7 +477,7 @@
             const infInp = document.getElementById("kw_inp_inf");
             const spamInp = document.getElementById("kw_inp_spam");
             fab.addEventListener("click", () =>
-                this.panel.classList.toggle("open")
+                this.panel.classList.toggle("open"),
             );
             document.addEventListener("click", (e) => {
                 if (!this.panel.contains(e.target))
@@ -501,13 +487,13 @@
                 const isEnabled = e.target.checked;
                 this.app.config.set(
                     this.app.config.keys.autoRefresh,
-                    isEnabled
+                    isEnabled,
                 );
                 if (isEnabled) {
                     infInp.checked = false;
                     this.app.config.set(
                         this.app.config.keys.infiniteScroll,
-                        false
+                        false,
                     );
                     this.app.infinite.toggle(false);
                     this.timeLeft = DEFAULTS.refreshTime;
@@ -520,14 +506,14 @@
                 const isEnabled = e.target.checked;
                 this.app.config.set(
                     this.app.config.keys.infiniteScroll,
-                    isEnabled
+                    isEnabled,
                 );
                 this.app.infinite.toggle(isEnabled);
                 if (isEnabled) {
                     autoInp.checked = false;
                     this.app.config.set(
                         this.app.config.keys.autoRefresh,
-                        false
+                        false,
                     );
                     this.updateTimerUI();
                 }
@@ -535,7 +521,7 @@
             spamInp.addEventListener("change", (e) => {
                 this.app.config.set(
                     this.app.config.keys.hideSpam,
-                    e.target.checked
+                    e.target.checked,
                 );
                 this.app.processor.toggleSpam(e.target.checked);
             });
@@ -548,7 +534,7 @@
         }
         updateTimerUI() {
             const isAuto = this.app.config.get(
-                this.app.config.keys.autoRefresh
+                this.app.config.keys.autoRefresh,
             );
             const txt = document.getElementById("kw_timer_txt");
             const fab = document.getElementById("kw_fab_btn");
@@ -566,14 +552,40 @@
         openSettings() {
             if (document.querySelector(".kw-overlay"))
                 document.querySelector(".kw-overlay").remove();
-            const modalHtml = `<div class="kw-overlay open" id="kw_settings"><div class="kw-modal"><div class="kw-modal-title"><span>Фильтр стоп-слов</span><span class="kw-modal-close" id="kw_modal_close">✕</span></div><div class="kw-input-group"><input type="text" class="kw-input" id="kw_word_inp" placeholder="Фраза (Enter)..."><button class="kw-btn" id="kw_word_add">+</button></div><div class="kw-tags" id="kw_tags_container"></div></div></div>`;
+
+            const aiConfig = this.app.config.getAiConfig();
+
+            const modalHtml = `
+            <div class="kw-overlay open" id="kw_settings">
+                <div class="kw-modal">
+                    <div class="kw-modal-title"><span>⚙️ Настройки Kwork Helper</span><span class="kw-modal-close" id="kw_modal_close">✕</span></div>
+                    
+                    <span class="kw-section-title">Фильтр стоп-слов</span>
+                    <div class="kw-input-group">
+                        <input type="text" class="kw-input" id="kw_word_inp" placeholder="Фраза (Enter)...">
+                        <button class="kw-btn" id="kw_word_add">+</button>
+                    </div>
+                    <div class="kw-tags" id="kw_tags_container"></div>
+
+                    <span class="kw-section-title">Настройки нейросети (OpenAI / OpenRouter)</span>
+                    <div class="kw-input-group"><input type="text" class="kw-input" id="kw_ai_base" placeholder="Base URL" value="${aiConfig.baseUrl}"></div>
+                    <div class="kw-input-group"><input type="password" class="kw-input" id="kw_ai_key" placeholder="API Key" value="${aiConfig.apiKey}"></div>
+                    <div class="kw-input-group"><input type="text" class="kw-input" id="kw_ai_model" placeholder="Model (e.g. gpt-4o-mini)" value="${aiConfig.model}"></div>
+                    <span class="kw-section-title">Системный промпт</span>
+                    <textarea class="kw-input kw-textarea" id="kw_ai_prompt" placeholder="Инструкция для нейросети...">${aiConfig.prompt}</textarea>
+
+                    <button class="kw-btn kw-btn-save" id="kw_save_all">💾 Сохранить настройки</button>
+                </div>
+            </div>`;
+
             document.body.insertAdjacentHTML("beforeend", modalHtml);
-            const render = () => {
+
+            const renderWords = () => {
                 const words = this.app.config.getStopWords();
                 document.getElementById("kw_tags_container").innerHTML = words
                     .map(
                         (w) =>
-                            `<div class="kw-tag">${w} <span class="kw-tag-rm" data-w="${w}">×</span></div>`
+                            `<div class="kw-tag">${w} <span class="kw-tag-rm" data-w="${w}">×</span></div>`,
                     )
                     .join("");
                 document.querySelectorAll(".kw-tag-rm").forEach((btn) => {
@@ -581,14 +593,14 @@
                         this.app.config.setStopWords(
                             this.app.config
                                 .getStopWords()
-                                .filter((x) => x !== btn.dataset.w)
+                                .filter((x) => x !== btn.dataset.w),
                         );
                         this.app.reprocessAll();
-                        render();
+                        renderWords();
                     };
                 });
             };
-            const add = () => {
+            const addWord = () => {
                 const val = document
                     .getElementById("kw_word_inp")
                     .value.trim()
@@ -599,18 +611,37 @@
                     words.push(val);
                     this.app.config.setStopWords(words);
                     this.app.reprocessAll();
-                    render();
+                    renderWords();
                 }
                 document.getElementById("kw_word_inp").value = "";
             };
+
+            document.getElementById("kw_word_add").onclick = addWord;
+            document.getElementById("kw_word_inp").onkeypress = (e) => {
+                if (e.key === "Enter") addWord();
+            };
+
             document.getElementById("kw_modal_close").onclick = () =>
                 document.querySelector(".kw-overlay").remove();
-            document.getElementById("kw_word_add").onclick = add;
-            document.getElementById("kw_word_inp").onkeypress = (e) => {
-                if (e.key === "Enter") add();
+            document.getElementById("kw_save_all").onclick = () => {
+                const newAiConfig = {
+                    baseUrl: document.getElementById("kw_ai_base").value.trim(),
+                    apiKey: document.getElementById("kw_ai_key").value.trim(),
+                    model: document.getElementById("kw_ai_model").value.trim(),
+                    prompt: document
+                        .getElementById("kw_ai_prompt")
+                        .value.trim(),
+                };
+                this.app.config.setAiConfig(newAiConfig);
+                GM_notification({
+                    text: "Настройки успешно сохранены",
+                    title: "Kwork Helper",
+                    timeout: 2000,
+                });
+                document.querySelector(".kw-overlay").remove();
             };
-            render();
-            document.getElementById("kw_word_inp").focus();
+
+            renderWords();
         }
     }
 
@@ -639,26 +670,25 @@
                 if (title && !title.querySelector(".kw-urgent-fire"))
                     title.insertAdjacentHTML(
                         "afterbegin",
-                        '<span class="kw-urgent-fire" title="Срочно!">🔥</span>'
+                        '<span class="kw-urgent-fire" title="Срочно!">🔥</span>',
                     );
             }
             this.forceReplaceStats(card);
             if (!processed) {
                 this.highlightPrice(card);
-                this.addCopyBtn(card);
-                this.setupUserNotes(card);
+                this.addAiBtn(card);
                 if (!isSpam) card.setAttribute("data-kw-state", "active");
             }
         }
         markAsSpam(card) {
             card.classList.add("kw-spam-card");
             const header = card.querySelector(
-                ".wants-card__header-right-block"
+                ".wants-card__header-right-block",
             );
             if (header && !card.querySelector(".kw-badge-spam"))
                 header.insertAdjacentHTML(
                     "afterbegin",
-                    '<div class="kw-badge kw-badge-spam">spam</div>'
+                    '<div class="kw-badge kw-badge-spam">spam</div>',
                 );
             if (this.app.config.get(this.app.config.keys.hideSpam))
                 card.classList.add("kw-hidden");
@@ -676,7 +706,7 @@
             let textNode = null;
             const walker = document.createTreeWalker(
                 statsBlock,
-                NodeFilter.SHOW_TEXT
+                NodeFilter.SHOW_TEXT,
             );
             while (walker.nextNode()) {
                 if (walker.currentNode.nodeValue.includes("Нанято")) {
@@ -692,14 +722,14 @@
                     p < DEFAULTS.badHireRate
                         ? "bad"
                         : p >= DEFAULTS.goodHireRate
-                        ? "good"
-                        : "mid";
+                          ? "good"
+                          : "mid";
                 const label =
                     type === "bad"
                         ? "Риск"
                         : type === "good"
-                        ? "Надежный"
-                        : "Средне";
+                          ? "Надежный"
+                          : "Средне";
                 const icon =
                     type === "bad" ? "⚠️" : type === "good" ? "🛡️" : "⚖️";
                 badgeHTML = `<span class="kw-badge kw-badge-${type}">${icon} ${label} (${p}%)</span>`;
@@ -715,7 +745,7 @@
                     next.remove();
             } else {
                 const container = statsBlock.querySelector(
-                    ".dib.v-align-t:last-child"
+                    ".dib.v-align-t:last-child",
                 );
                 if (container && !container.querySelector(".kw-badge")) {
                     const div = document.createElement("div");
@@ -727,82 +757,127 @@
         }
         highlightPrice(card) {
             const isLowPriceLabel = card.querySelector(
-                ".wants-card__review--low-price"
+                ".wants-card__review--low-price",
             );
             if (isLowPriceLabel) {
                 card.classList.add("kw-strip-bad");
                 return;
             }
-            const el = card.querySelector(".wants-card__price");
-            if (!el) return;
-            const p = parseInt(el.textContent.replace(/\D/g, ""));
-            if (p >= DEFAULTS.goodPrice) card.classList.add("kw-strip-good");
-            else if (p <= DEFAULTS.badPrice && p > 0)
+
+            const priceEl = card.querySelector(".wants-card__price");
+            const higherPriceEl = card.querySelector(
+                ".wants-card__description-higher-price",
+            );
+
+            let price = 0;
+            let higherPrice = 0;
+
+            if (priceEl) {
+                price =
+                    parseInt(
+                        priceEl.textContent
+                            .replace(/\s/g, "")
+                            .replace(/\D/g, ""),
+                    ) || 0;
+            }
+            if (higherPriceEl) {
+                higherPrice =
+                    parseInt(
+                        higherPriceEl.textContent
+                            .replace(/\s/g, "")
+                            .replace(/\D/g, ""),
+                    ) || 0;
+            }
+            const effectivePrice = Math.max(price, higherPrice);
+
+            if (effectivePrice >= DEFAULTS.goodPrice)
+                card.classList.add("kw-strip-good");
+            else if (effectivePrice <= DEFAULTS.badPrice && effectivePrice > 0)
                 card.classList.add("kw-strip-bad");
         }
-        addCopyBtn(card) {
+        addAiBtn(card) {
             const link = card.querySelector(".wants-card__header-title a");
             if (!link) return;
+
             const btn = document.createElement("button");
-            btn.className = "kw-copy-btn";
-            btn.innerHTML = "❐";
-            btn.title = "Скопировать заголовок";
+            btn.className = "kw-ai-btn";
+            btn.innerHTML = "🤖";
+            btn.title = "Анализ нейросетью";
+
             btn.onclick = (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                navigator.clipboard.writeText(link.innerText);
-                btn.style.color = "#28a745";
-                setTimeout(() => (btn.style.color = ""), 600);
+
+                const existing = card.querySelector(".kw-ai-response-box");
+                if (existing) {
+                    existing.remove();
+                    return;
+                }
+
+                btn.classList.add("loading");
+
+                const descBlock = card.querySelector(
+                    ".wants-card__description-text",
+                );
+                const fullTextEl =
+                    descBlock.querySelector(".overflow-hidden")
+                        ?.nextElementSibling || descBlock;
+                const fullText = fullTextEl.innerText;
+                const title = link.innerText;
+
+                let priceText = "Бюджет не указан";
+                const priceBlock = card.querySelector(".wants-card__right");
+                if (priceBlock) {
+                    priceText = priceBlock.innerText
+                        .replace(/\s+/g, " ")
+                        .trim();
+                }
+
+                const fullPrompt = `Заголовок: ${title}\n\nБюджет (инфо): ${priceText}\n\nОписание:\n${fullText}`;
+
+                this.app.ai.analyze(
+                    fullPrompt,
+                    (response) => {
+                        btn.classList.remove("loading");
+                        const box = document.createElement("div");
+                        box.className = "kw-ai-response-box";
+                        box.innerText = response;
+                        card.querySelector(
+                            ".wants-card__description-text",
+                        ).appendChild(box);
+                    },
+                    (error) => {
+                        btn.classList.remove("loading");
+                        const box = document.createElement("div");
+                        box.className = "kw-ai-response-box kw-ai-error";
+                        box.innerText = ` ${error}`;
+                        card.querySelector(
+                            ".wants-card__description-text",
+                        ).appendChild(box);
+                    },
+                );
             };
             link.parentNode.appendChild(btn);
-        }
-        setupUserNotes(card) {
-            const link = card.querySelector(
-                '.want-payer-statistic a[href*="/user/"]'
-            );
-            if (!link) return;
-            const username = link.textContent.trim();
-            const note = this.app.config.getUserNote(username);
-            const icon = document.createElement("span");
-            icon.className = `kw-note-icon ${note ? "has-note" : ""}`;
-            icon.innerHTML = note ? "📝" : "✏️";
-            icon.onclick = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const text = prompt(`Заметка для ${username}:`, note || "");
-                if (text !== null) {
-                    this.app.config.setUserNote(username, text);
-                    this.app.reprocessAll(true);
-                }
-            };
-            if (note) {
-                const div = document.createElement("div");
-                div.className = "kw-note-text";
-                div.innerText = note;
-                link.parentNode.appendChild(div);
-            }
-            link.after(icon);
         }
     }
 
     class KworkAssistant {
         constructor() {
             this.config = new ConfigManager();
-            this.avatarManager = new AvatarManager();
+            this.ai = new AiClient(this.config);
             this.processor = new CardProcessor(this);
             this.infinite = new InfiniteScrollManager(this);
             this.ui = new UIManager(this);
         }
         init() {
             this.ui.renderPanel();
-            this.avatarManager.init();
             this.fixExpandButtons();
             this.runLoop();
             new MutationObserver((ms) => {
                 if (ms.some((m) => m.addedNodes.length)) this.runLoop();
             }).observe(
                 document.querySelector(".wants-content") || document.body,
-                { childList: true, subtree: true }
+                { childList: true, subtree: true },
             );
             setInterval(() => this.tick(), 1000);
             setInterval(() => this.runLoop(), 500);
@@ -818,7 +893,7 @@
                 )
                     return;
                 const descContainer = btn.closest(
-                    ".wants-card__description-text"
+                    ".wants-card__description-text",
                 );
                 if (!descContainer) return;
                 const shortBlock =
@@ -847,11 +922,12 @@
                 document.querySelectorAll(".want-card").forEach((c) => {
                     c.removeAttribute("data-kw-state");
                     c.classList.remove("kw-strip-good", "kw-strip-bad");
+                    const aiBox = c.querySelector(".kw-ai-response-box");
+                    if (aiBox) aiBox.remove();
+                    const aiBtn = c.querySelector(".kw-ai-btn");
+                    if (aiBtn) aiBtn.remove();
                 });
             }
-            document
-                .querySelectorAll(".kw-note-icon, .kw-note-text")
-                .forEach((n) => n.remove());
             this.runLoop();
         }
         tick() {
@@ -864,7 +940,7 @@
 
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", () =>
-            new KworkAssistant().init()
+            new KworkAssistant().init(),
         );
     } else {
         new KworkAssistant().init();
