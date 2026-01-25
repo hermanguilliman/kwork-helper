@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kwork Helper
 // @namespace    http://tampermonkey.net/
-// @version      2.0.2
+// @version      2.0.3
 // @description  Optimization of Kwork: stats, spam filter, infinite scroll, and AI integration for fast order analysis.
 // @author       Herman Guilliman
 // @updateURL    https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
@@ -230,85 +230,87 @@
             this.config = configManager;
         }
 
-        async analyze(jobText, onSuccess, onError) {
-            const cfg = this.config.getAiConfig();
-            if (!cfg.apiKey) {
-                onError("Не задан API Key в настройках!");
-                return;
-            }
+        analyze(jobText) {
+            return new Promise((resolve, reject) => {
+                const cfg = this.config.getAiConfig();
+                if (!cfg.apiKey) {
+                    reject(new Error("Не задан API Key в настройках!"));
+                    return;
+                }
 
-            const messages = [
-                { role: "system", content: cfg.prompt },
-                { role: "user", content: `ДЕТАЛИ ЗАКАЗА:\n${jobText}` },
-            ];
+                const messages = [
+                    { role: "system", content: cfg.prompt },
+                    { role: "user", content: `ДЕТАЛИ ЗАКАЗА:\n${jobText}` },
+                ];
 
-            const payload = {
-                model: cfg.model,
-                messages: messages,
-                max_tokens: cfg.maxTokens,
-                temperature: 0.7,
-            };
+                const payload = {
+                    model: cfg.model,
+                    messages: messages,
+                    max_tokens: cfg.maxTokens,
+                    temperature: 0.7,
+                };
 
-            GM_xmlhttpRequest({
-                method: "POST",
-                url:
-                    cfg.baseUrl +
-                    (cfg.baseUrl.endsWith("/") ? "" : "/") +
-                    "chat/completions",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${cfg.apiKey}`,
-                },
-                data: JSON.stringify(payload),
-                timeout: 30000,
-                onload: (response) => {
-                    try {
-                        let data;
+                GM_xmlhttpRequest({
+                    method: "POST",
+                    url:
+                        cfg.baseUrl +
+                        (cfg.baseUrl.endsWith("/") ? "" : "/") +
+                        "chat/completions",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${cfg.apiKey}`,
+                    },
+                    data: JSON.stringify(payload),
+                    timeout: 30000,
+                    onload: (response) => {
                         try {
-                            data = JSON.parse(response.responseText);
-                        } catch (e) {
+                            let data;
+                            try {
+                                data = JSON.parse(response.responseText);
+                            } catch (e) {
+                                if (response.status !== 200) {
+                                    throw new Error(
+                                        `HTTP ${response.status} (Not JSON)`,
+                                    );
+                                }
+                                throw new Error("Некорректный JSON ответ");
+                            }
+
                             if (response.status !== 200) {
-                                throw new Error(
-                                    `HTTP ${response.status} (Not JSON)`,
-                                );
+                                let errorMsg = `Ошибка API (${response.status})`;
+
+                                if (data.error && data.error.message) {
+                                    errorMsg = `API: ${data.error.message}`;
+                                } else if (data.message) {
+                                    errorMsg = `API: ${data.message}`;
+                                }
+
+                                if (response.status === 401)
+                                    errorMsg = "Ошибка 401: Неверный API Key";
+                                if (response.status === 429)
+                                    errorMsg =
+                                        "Ошибка 429: Лимит запросов исчерпан";
+                                if (response.status >= 500)
+                                    errorMsg = `Ошибка ${response.status}: Проблема на сервере ИИ`;
+
+                                throw new Error(errorMsg);
                             }
-                            throw new Error("Некорректный JSON ответ");
+
+                            const content =
+                                data.choices?.[0]?.message?.content ||
+                                "Пустой ответ от нейросети.";
+                            resolve(content);
+                        } catch (e) {
+                            reject(e);
                         }
-
-                        if (response.status !== 200) {
-                            let errorMsg = `Ошибка API (${response.status})`;
-
-                            if (data.error && data.error.message) {
-                                errorMsg = `API: ${data.error.message}`;
-                            } else if (data.message) {
-                                errorMsg = `API: ${data.message}`;
-                            }
-
-                            if (response.status === 401)
-                                errorMsg = "Ошибка 401: Неверный API Key";
-                            if (response.status === 429)
-                                errorMsg =
-                                    "Ошибка 429: Лимит запросов исчерпан";
-                            if (response.status >= 500)
-                                errorMsg = `Ошибка ${response.status}: Проблема на сервере ИИ`;
-
-                            throw new Error(errorMsg);
-                        }
-
-                        const content =
-                            data.choices?.[0]?.message?.content ||
-                            "Пустой ответ от нейросети.";
-                        onSuccess(content);
-                    } catch (e) {
-                        onError(`${e.message}`);
-                    }
-                },
-                onerror: (err) => {
-                    onError("Ошибка сети / Connection Error");
-                },
-                ontimeout: () => {
-                    onError("Таймаут соединения (30с)");
-                },
+                    },
+                    onerror: (err) => {
+                        reject(new Error("Ошибка сети / Connection Error"));
+                    },
+                    ontimeout: () => {
+                        reject(new Error("Таймаут соединения (30с)"));
+                    },
+                });
             });
         }
     }
@@ -854,7 +856,7 @@
             btn.innerHTML = "🤖";
             btn.title = "Анализ нейросетью";
 
-            btn.onclick = (e) => {
+            btn.onclick = async (e) => {
                 e.preventDefault();
                 e.stopPropagation();
 
@@ -885,27 +887,25 @@
 
                 const fullPrompt = `Заголовок: ${title}\n\nБюджет (инфо): ${priceText}\n\nОписание:\n${fullText}`;
 
-                this.app.ai.analyze(
-                    fullPrompt,
-                    (response) => {
-                        btn.classList.remove("loading");
-                        const box = document.createElement("div");
-                        box.className = "kw-ai-response-box";
-                        box.innerText = response;
-                        card.querySelector(
-                            ".wants-card__description-text",
-                        ).appendChild(box);
-                    },
-                    (error) => {
-                        btn.classList.remove("loading");
-                        const box = document.createElement("div");
-                        box.className = "kw-ai-response-box kw-ai-error";
-                        box.innerText = ` ${error}`;
-                        card.querySelector(
-                            ".wants-card__description-text",
-                        ).appendChild(box);
-                    },
-                );
+                try {
+                    const response = await this.app.ai.analyze(fullPrompt);
+                    
+                    btn.classList.remove("loading");
+                    const box = document.createElement("div");
+                    box.className = "kw-ai-response-box";
+                    box.innerText = response;
+                    card.querySelector(
+                        ".wants-card__description-text",
+                    ).appendChild(box);
+                } catch (error) {
+                    btn.classList.remove("loading");
+                    const box = document.createElement("div");
+                    box.className = "kw-ai-response-box kw-ai-error";
+                    box.innerText = ` ${error.message}`;
+                    card.querySelector(
+                        ".wants-card__description-text",
+                    ).appendChild(box);
+                }
             };
             link.parentNode.appendChild(btn);
         }
