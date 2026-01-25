@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kwork Helper
 // @namespace    http://tampermonkey.net/
-// @version      2.0.1
+// @version      2.0.2
 // @description  Optimization of Kwork: stats, spam filter, infinite scroll, and AI integration for fast order analysis.
 // @author       Herman Guilliman
 // @updateURL    https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
@@ -260,26 +260,54 @@
                     Authorization: `Bearer ${cfg.apiKey}`,
                 },
                 data: JSON.stringify(payload),
+                timeout: 30000,
                 onload: (response) => {
                     try {
-                        if (response.status !== 200) {
-                            throw new Error(
-                                `Status ${response.status}: ${response.responseText}`,
-                            );
+                        let data;
+                        try {
+                            data = JSON.parse(response.responseText);
+                        } catch (e) {
+                            if (response.status !== 200) {
+                                throw new Error(
+                                    `HTTP ${response.status} (Not JSON)`,
+                                );
+                            }
+                            throw new Error("Некорректный JSON ответ");
                         }
-                        const data = JSON.parse(response.responseText);
+
+                        if (response.status !== 200) {
+                            let errorMsg = `Ошибка API (${response.status})`;
+
+                            if (data.error && data.error.message) {
+                                errorMsg = `API: ${data.error.message}`;
+                            } else if (data.message) {
+                                errorMsg = `API: ${data.message}`;
+                            }
+
+                            if (response.status === 401)
+                                errorMsg = "Ошибка 401: Неверный API Key";
+                            if (response.status === 429)
+                                errorMsg =
+                                    "Ошибка 429: Лимит запросов исчерпан";
+                            if (response.status >= 500)
+                                errorMsg = `Ошибка ${response.status}: Проблема на сервере ИИ`;
+
+                            throw new Error(errorMsg);
+                        }
+
                         const content =
                             data.choices?.[0]?.message?.content ||
                             "Пустой ответ от нейросети.";
                         onSuccess(content);
                     } catch (e) {
-                        onError(`Ошибка парсинга: ${e.message}`);
+                        onError(`${e.message}`);
                     }
                 },
                 onerror: (err) => {
-                    onError(
-                        `Ошибка сети: ${err.statusText || "Unknown error"}`,
-                    );
+                    onError("Ошибка сети / Connection Error");
+                },
+                ontimeout: () => {
+                    onError("Таймаут соединения (30с)");
                 },
             });
         }
