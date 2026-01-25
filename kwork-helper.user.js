@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kwork Helper
 // @namespace    http://tampermonkey.net/
-// @version      2.0.0
+// @version      2.0.1
 // @description  Optimization of Kwork: stats, spam filter, infinite scroll, and AI integration for fast order analysis.
 // @author       Herman Guilliman
 // @updateURL    https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
@@ -23,8 +23,10 @@
         goodHireRate: 40,
         badHireRate: 20,
         refreshTime: 60,
+
         aiBaseUrl: "https://api.openai.com/v1",
         aiModel: "gpt-4o-mini",
+        aiMaxTokens: 500,
         aiPrompt:
             "Ты опытный фрилансер. Проанализируй этот заказ. 1. Насколько адекватна цена за такой объем? 2. Есть ли подводные камни? 3. Стоит ли откликаться? Ответь кратко.",
         stopWords: [
@@ -172,6 +174,7 @@
                 aiBaseUrl: "kw_ai_base_url",
                 aiApiKey: "kw_ai_api_key",
                 aiModel: "kw_ai_model",
+                aiMaxTokens: "kw_ai_max_tokens",
                 aiPrompt: "kw_ai_prompt",
             };
         }
@@ -204,8 +207,11 @@
                     this.keys.aiBaseUrl,
                     DEFAULTS.aiBaseUrl,
                 ),
-                apiKey: this.getString(this.keys.aiApiKey, ""),
+                apiKey: this.getString(this.keys.aiApiKey, DEFAULTS.aiApiKey),
                 model: this.getString(this.keys.aiModel, DEFAULTS.aiModel),
+                maxTokens: parseInt(
+                    this.getString(this.keys.aiMaxTokens, DEFAULTS.aiMaxTokens),
+                ),
                 prompt: this.getString(this.keys.aiPrompt, DEFAULTS.aiPrompt),
             };
         }
@@ -213,6 +219,7 @@
             this.setString(this.keys.aiBaseUrl, cfg.baseUrl);
             this.setString(this.keys.aiApiKey, cfg.apiKey);
             this.setString(this.keys.aiModel, cfg.model);
+            this.setString(this.keys.aiMaxTokens, cfg.maxTokens);
             this.setString(this.keys.aiPrompt, cfg.prompt);
         }
     }
@@ -237,6 +244,7 @@
             const payload = {
                 model: cfg.model,
                 messages: messages,
+                max_tokens: cfg.maxTokens,
                 temperature: 0.7,
             };
 
@@ -308,9 +316,14 @@
                         this.container.nextSibling,
                     );
             }
-            window.addEventListener("scroll", () => {
-                if (this.isEnabled) this.onScroll();
-            });
+
+            window.addEventListener(
+                "scroll",
+                () => {
+                    if (this.isEnabled) this.onScroll();
+                },
+                { passive: true },
+            );
             this.updateState();
         }
         toggle(state) {
@@ -567,14 +580,19 @@
                     </div>
                     <div class="kw-tags" id="kw_tags_container"></div>
 
-                    <span class="kw-section-title">Настройки нейросети (OpenAI / OpenRouter)</span>
-                    <div class="kw-input-group"><input type="text" class="kw-input" id="kw_ai_base" placeholder="Base URL" value="${aiConfig.baseUrl}"></div>
-                    <div class="kw-input-group"><input type="password" class="kw-input" id="kw_ai_key" placeholder="API Key" value="${aiConfig.apiKey}"></div>
-                    <div class="kw-input-group"><input type="text" class="kw-input" id="kw_ai_model" placeholder="Model (e.g. gpt-4o-mini)" value="${aiConfig.model}"></div>
-                    <span class="kw-section-title">Системный промпт</span>
-                    <textarea class="kw-input kw-textarea" id="kw_ai_prompt" placeholder="Инструкция для нейросети...">${aiConfig.prompt}</textarea>
+                    <form onsubmit="return false;" autocomplete="off">
+                        <span class="kw-section-title">Настройки нейросети (OpenAI / OpenRouter)</span>
+                        <div class="kw-input-group"><input type="text" class="kw-input" id="kw_ai_base" placeholder="Base URL" value="${aiConfig.baseUrl}" autocomplete="url" name="ai_base_url"></div>
+                        <div class="kw-input-group"><input type="password" class="kw-input" id="kw_ai_key" placeholder="API Key" value="${aiConfig.apiKey}" autocomplete="new-password" name="ai_api_key"></div>
+                        <div class="kw-input-group">
+                            <input type="text" class="kw-input" id="kw_ai_model" placeholder="Model (e.g. gpt-4o-mini)" value="${aiConfig.model}" autocomplete="off" name="ai_model">
+                            <input type="number" class="kw-input" id="kw_ai_tokens" placeholder="Max Tokens" value="${aiConfig.maxTokens}" title="Лимит токенов" style="max-width: 100px;" autocomplete="off" name="ai_tokens">
+                        </div>
+                        <span class="kw-section-title">Системный промпт</span>
+                        <textarea class="kw-input kw-textarea" id="kw_ai_prompt" placeholder="Инструкция для нейросети...">${aiConfig.prompt}</textarea>
+                    </form>
 
-                    <button class="kw-btn kw-btn-save" id="kw_save_all">💾 Сохранить настройки</button>
+                    <button class="kw-btn kw-btn-save" type="button" id="kw_save_all">💾 Сохранить настройки</button>
                 </div>
             </div>`;
 
@@ -628,6 +646,9 @@
                     baseUrl: document.getElementById("kw_ai_base").value.trim(),
                     apiKey: document.getElementById("kw_ai_key").value.trim(),
                     model: document.getElementById("kw_ai_model").value.trim(),
+                    maxTokens: document
+                        .getElementById("kw_ai_tokens")
+                        .value.trim(),
                     prompt: document
                         .getElementById("kw_ai_prompt")
                         .value.trim(),
