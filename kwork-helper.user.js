@@ -25,6 +25,7 @@
         refreshTime: 60,
 
         aiBaseUrl: "https://api.openai.com/v1",
+        aiApiKey: "",
         aiModel: "gpt-4o-mini",
         aiMaxTokens: 500,
         aiPrompt:
