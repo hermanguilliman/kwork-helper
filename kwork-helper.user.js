@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kwork Helper
 // @namespace    http://tampermonkey.net/
-// @version      2.0.4
+// @version      2.0.5
 // @description  Optimization of Kwork: stats, spam filter, infinite scroll, and AI integration for fast order analysis.
 // @author       Herman Guilliman
 // @updateURL    https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
@@ -60,6 +60,49 @@
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#39;");
+    }
+
+    // Критичные селекторы для диагностики: если Kwork переименует классы,
+    // checkDomHealth() один раз предупредит в консоли.
+    const CORE_SELECTORS = {
+        ".want-card": "карточки заказов",
+        ".wants-card__header-title": "заголовок карточки",
+        ".wants-card__price": "блок цены",
+        ".wants-card__description-text": "описание заказа",
+        ".want-payer-statistic": "статистика заказчика",
+    };
+    const seenSelectors = new Set();
+    const reportedDomBreaks = new Set();
+    const reportedSafeErrors = new Set();
+
+    // Изолирует шаг обработки: сбой одной функции не роняет остальные
+    // и не засоряет консоль каждые 500 мс — ошибка логируется один раз.
+    function safe(label, fn) {
+        try {
+            fn();
+        } catch (err) {
+            const key = label + ": " + (err && err.message ? err.message : err);
+            if (!reportedSafeErrors.has(key)) {
+                reportedSafeErrors.add(key);
+                console.error(`[Kwork Helper] Сбой шага «${label}»:`, err);
+            }
+        }
+    }
+
+    // Ранняя диагностика вёрстки Kwork (вызывается из runLoop с троттлингом).
+    function checkDomHealth() {
+        if (!document.querySelector(".want-card")) return;
+        for (const sel of Object.keys(CORE_SELECTORS)) {
+            if (sel === ".want-card") continue;
+            if (document.querySelector(sel)) {
+                seenSelectors.add(sel);
+            } else if (seenSelectors.has(sel) && !reportedDomBreaks.has(sel)) {
+                reportedDomBreaks.add(sel);
+                console.warn(
+                    `[Kwork Helper] Селектор «${sel}» (${CORE_SELECTORS[sel]}) больше не найден — похоже, Kwork изменил вёрстку.`,
+                );
+            }
+        }
     }
 
     const CSS = `
@@ -716,33 +759,40 @@
         process(card) {
             let processed = card.getAttribute("data-kw-state");
             const textContent = (card.innerText || "").toLowerCase();
-            const stopWords = this.app.config.getStopWords();
             let isSpam = false;
 
-            if (stopWords.some((w) => textContent.includes(w))) {
-                isSpam = true;
-                if (processed !== "spam") this.markAsSpam(card);
-            } else if (processed === "spam") {
-                // Стоп-слово убрали в настройках — возвращаем карточку
-                // и обрабатываем её заново, как новую.
-                this.unmarkSpam(card);
-                processed = null;
-            }
+            safe("спам-фильтр", () => {
+                const stopWords = this.app.config.getStopWords();
+                if (stopWords.some((w) => textContent.includes(w))) {
+                    isSpam = true;
+                    if (processed !== "spam") this.markAsSpam(card);
+                } else if (processed === "spam") {
+                    // Стоп-слово убрали в настройках — возвращаем карточку
+                    // и обрабатываем её заново, как новую.
+                    this.unmarkSpam(card);
+                    processed = null;
+                }
+            });
+
             if (
                 !processed &&
                 DEFAULTS.urgentWords.some((w) => textContent.includes(w))
             ) {
-                const title = card.querySelector(".wants-card__header-title");
-                if (title && !title.querySelector(".kw-urgent-fire"))
-                    title.insertAdjacentHTML(
-                        "afterbegin",
-                        '<span class="kw-urgent-fire" title="Срочно!">🔥</span>',
+                safe("срочность", () => {
+                    const title = card.querySelector(
+                        ".wants-card__header-title",
                     );
+                    if (title && !title.querySelector(".kw-urgent-fire"))
+                        title.insertAdjacentHTML(
+                            "afterbegin",
+                            '<span class="kw-urgent-fire" title="Срочно!">🔥</span>',
+                        );
+                });
             }
-            this.forceReplaceStats(card);
+            safe("статистика", () => this.forceReplaceStats(card));
             if (!processed) {
-                this.highlightPrice(card);
-                this.addAiBtn(card);
+                safe("цена", () => this.highlightPrice(card));
+                safe("AI-кнопка", () => this.addAiBtn(card));
                 if (!isSpam) card.setAttribute("data-kw-state", "active");
             }
         }
@@ -943,8 +993,8 @@
             this.ui = new UIManager(this);
         }
         init() {
-            this.ui.renderPanel();
-            this.fixExpandButtons();
+            safe("панель управления", () => this.ui.renderPanel());
+            safe("раскрытие описаний", () => this.fixExpandButtons());
             this.runLoop();
             new MutationObserver((ms) => {
                 if (ms.some((m) => m.addedNodes.length)) this.runLoop();
@@ -986,8 +1036,13 @@
             });
         }
         runLoop() {
-            document.querySelectorAll(".want-card").forEach((card) => {
-                this.processor.process(card);
+            // Диагностика вёрстки ~каждые 10 секунд (20 проходов по 500 мс)
+            this.loopCount = (this.loopCount || 0) + 1;
+            if (this.loopCount % 20 === 1) checkDomHealth();
+            safe("обработка карточек", () => {
+                document.querySelectorAll(".want-card").forEach((card) => {
+                    this.processor.process(card);
+                });
             });
         }
         reprocessAll(force = false) {
