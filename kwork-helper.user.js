@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kwork Helper
 // @namespace    http://tampermonkey.net/
-// @version      2.0.6
+// @version      2.0.7
 // @description  Optimization of Kwork: stats, spam filter, infinite scroll, and AI integration for fast order analysis.
 // @author       Herman Guilliman
 // @updateURL    https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
@@ -194,7 +194,7 @@
         transition: transform 0.2s; filter: grayscale(100%); opacity: 0.6;
     }
     .kw-ai-btn:hover { transform: scale(1.2); filter: grayscale(0%); opacity: 1; }
-    .kw-ai-btn.loading { animation: spin 1s infinite linear; pointer-events: none; }
+    .kw-ai-btn.loading { animation: kw-ai-pulse 1.2s ease-in-out infinite; pointer-events: none; }
     .kw-ai-response-box {
         margin-top: 12px; padding: 12px; border-radius: 8px; 
         background: #f4f8fb; border: 1px solid #dcebf7; color: #2c3e50; font-size: 13px;
@@ -214,7 +214,7 @@
 
     @keyframes pulse-ring { 0% { transform: scale(1); opacity: 1; } 100% { transform: scaleX(1.1) scaleY(1.3); opacity: 0; } }
     @keyframes pulse { 0% { transform: scale(0.95); opacity: 0.7; } 50% { transform: scale(1.1); opacity: 1; } 100% { transform: scale(0.95); opacity: 0.7; } }
-    @keyframes spin { 100% { transform: rotate(360deg); } }
+    @keyframes kw-ai-pulse { 0%, 100% { transform: scale(1); filter: blur(0); opacity: 0.65; } 50% { transform: scale(1.4); filter: blur(2.5px); opacity: 1; } }
     `;
 
     class ConfigManager {
