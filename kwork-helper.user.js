@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kwork Helper
 // @namespace    http://tampermonkey.net/
-// @version      2.0.5
+// @version      2.0.6
 // @description  Optimization of Kwork: stats, spam filter, infinite scroll, and AI integration for fast order analysis.
 // @author       Herman Guilliman
 // @updateURL    https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
@@ -681,6 +681,11 @@
 
             document.body.insertAdjacentHTML("beforeend", modalHtml);
 
+            const overlay = document.querySelector(".kw-overlay");
+            overlay.addEventListener("click", (e) => {
+                if (e.target === overlay) overlay.remove();
+            });
+
             const renderWords = () => {
                 const words = this.app.config.getStopWords();
                 document.getElementById("kw_tags_container").innerHTML = words
@@ -960,16 +965,26 @@
 
                 const fullPrompt = `Заголовок: ${title}\n\nБюджет (инфо): ${priceText}\n\nОписание:\n${fullText}`;
 
+                // Кэш ответов на сессию: повторный клик по той же карточке
+                // не тратит токены и не ждёт сеть.
+                const cacheKey =
+                    (card.getAttribute("data-id") || "") +
+                    "|" +
+                    title +
+                    "|" +
+                    priceText;
+                const cached = this.app.aiCache.get(cacheKey);
+                if (cached) {
+                    btn.classList.remove("loading");
+                    this.showAiResponse(card, cached);
+                    return;
+                }
+
                 try {
                     const response = await this.app.ai.analyze(fullPrompt);
-                    
                     btn.classList.remove("loading");
-                    const box = document.createElement("div");
-                    box.className = "kw-ai-response-box";
-                    box.innerText = response;
-                    card.querySelector(
-                        ".wants-card__description-text",
-                    ).appendChild(box);
+                    this.app.cacheAiResponse(cacheKey, response);
+                    this.showAiResponse(card, response);
                 } catch (error) {
                     btn.classList.remove("loading");
                     const box = document.createElement("div");
@@ -982,6 +997,14 @@
             };
             link.parentNode.appendChild(btn);
         }
+        showAiResponse(card, text) {
+            const box = document.createElement("div");
+            box.className = "kw-ai-response-box";
+            box.innerText = text;
+            card
+                .querySelector(".wants-card__description-text")
+                .appendChild(box);
+        }
     }
 
     class KworkAssistant {
@@ -991,10 +1014,30 @@
             this.processor = new CardProcessor(this);
             this.infinite = new InfiniteScrollManager(this);
             this.ui = new UIManager(this);
+            // Сессионный кэш AI-ответов по карточкам (в памяти, не localStorage)
+            this.aiCache = new Map();
+        }
+        cacheAiResponse(key, response) {
+            if (!key) return;
+            this.aiCache.set(key, response);
+            if (this.aiCache.size > 200) {
+                const oldest = this.aiCache.keys().next().value;
+                if (oldest !== undefined) this.aiCache.delete(oldest);
+            }
+        }
+        restoreScroll() {
+            const raw = sessionStorage.getItem("kw_scroll_pos");
+            if (raw === null) return;
+            sessionStorage.removeItem("kw_scroll_pos");
+            const y = parseInt(raw, 10);
+            // У самого верха оставляем топ — там появляются новые заказы.
+            if (!Number.isFinite(y) || y < 800) return;
+            window.scrollTo(0, y);
         }
         init() {
             safe("панель управления", () => this.ui.renderPanel());
             safe("раскрытие описаний", () => this.fixExpandButtons());
+            safe("восстановление скролла", () => this.restoreScroll());
             this.runLoop();
             new MutationObserver((ms) => {
                 if (ms.some((m) => m.addedNodes.length)) this.runLoop();
@@ -1062,7 +1105,11 @@
             if (!this.config.get(this.config.keys.autoRefresh)) return;
             this.ui.timeLeft--;
             this.ui.updateTimerUI();
-            if (this.ui.timeLeft <= 0) window.location.reload();
+            if (this.ui.timeLeft <= 0) {
+                // Позиция скролла — временное значение в sessionStorage, не настройка.
+                sessionStorage.setItem("kw_scroll_pos", String(window.scrollY));
+                window.location.reload();
+            }
         }
     }
 
