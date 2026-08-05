@@ -2,7 +2,7 @@
 
 **Kwork Helper** — это мощный Userscript для оптимизации работы на бирже фриланса [Kwork.ru](https://kwork.ru/projects). Скрипт добавляет полезную статистику, фильтрует спам, включает бесконечную прокрутку и интегрирует искусственный интеллект для быстрого анализа заказов.
 
-![Version](https://img.shields.io/badge/version-2.0.0-black) ![Kwork](https://img.shields.io/badge/platform-Kwork-green)
+![Version](https://img.shields.io/badge/version-2.0.4-black) ![Kwork](https://img.shields.io/badge/platform-Kwork-green)
 
 ## ✨ Основные возможности
 

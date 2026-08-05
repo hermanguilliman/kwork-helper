@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kwork Helper
 // @namespace    http://tampermonkey.net/
-// @version      2.0.3
+// @version      2.0.4
 // @description  Optimization of Kwork: stats, spam filter, infinite scroll, and AI integration for fast order analysis.
 // @author       Herman Guilliman
 // @updateURL    https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
@@ -52,6 +52,15 @@
             "горит",
         ],
     };
+
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
 
     const CSS = `
     /* CORE PANEL & UI */
@@ -148,7 +157,7 @@
         background: #f4f8fb; border: 1px solid #dcebf7; color: #2c3e50; font-size: 13px;
         line-height: 1.5; white-space: pre-wrap; position: relative;
     }
-    .kw-ai-response-box::before { content: "🤖 Неройсеть:"; display: block; font-weight: bold; color: #3498db; margin-bottom: 6px; }
+    .kw-ai-response-box::before { content: "🤖 Нейросеть:"; display: block; font-weight: bold; color: #3498db; margin-bottom: 6px; }
     .kw-ai-error { background: #fff5f5; border-color: #ffcccc; color: #c0392b; }
     .kw-ai-error::before { content: "❌ Ошибка:"; color: #c0392b; }
 
@@ -366,8 +375,8 @@
             pags.forEach((el) => {
                 el.style.display = this.isEnabled ? "none" : "";
             });
-            if (this.loader)
-                this.loader.style.display = this.isEnabled ? "none" : "none";
+            // Loader visibility is managed by loadNextPage()/onIframeLoad()/finishFeed()
+            if (this.loader) this.loader.style.display = "none";
         }
         onScroll() {
             if (this.isLoading || this.isFinished) return;
@@ -613,14 +622,14 @@
 
                     <form onsubmit="return false;" autocomplete="off">
                         <span class="kw-section-title">Настройки нейросети (OpenAI / OpenRouter)</span>
-                        <div class="kw-input-group"><input type="text" class="kw-input" id="kw_ai_base" placeholder="Base URL" value="${aiConfig.baseUrl}" autocomplete="url" name="ai_base_url"></div>
-                        <div class="kw-input-group"><input type="password" class="kw-input" id="kw_ai_key" placeholder="API Key" value="${aiConfig.apiKey}" autocomplete="new-password" name="ai_api_key"></div>
+                        <div class="kw-input-group"><input type="text" class="kw-input" id="kw_ai_base" placeholder="Base URL" value="${escapeHtml(aiConfig.baseUrl)}" autocomplete="url" name="ai_base_url"></div>
+                        <div class="kw-input-group"><input type="password" class="kw-input" id="kw_ai_key" placeholder="API Key" value="${escapeHtml(aiConfig.apiKey)}" autocomplete="new-password" name="ai_api_key"></div>
                         <div class="kw-input-group">
-                            <input type="text" class="kw-input" id="kw_ai_model" placeholder="Model (e.g. gpt-4o-mini)" value="${aiConfig.model}" autocomplete="off" name="ai_model">
-                            <input type="number" class="kw-input" id="kw_ai_tokens" placeholder="Max Tokens" value="${aiConfig.maxTokens}" title="Лимит токенов" style="max-width: 100px;" autocomplete="off" name="ai_tokens">
+                            <input type="text" class="kw-input" id="kw_ai_model" placeholder="Model (e.g. gpt-4o-mini)" value="${escapeHtml(aiConfig.model)}" autocomplete="off" name="ai_model">
+                            <input type="number" class="kw-input" id="kw_ai_tokens" placeholder="Max Tokens" value="${escapeHtml(aiConfig.maxTokens)}" title="Лимит токенов" style="max-width: 100px;" autocomplete="off" name="ai_tokens">
                         </div>
                         <span class="kw-section-title">Системный промпт</span>
-                        <textarea class="kw-input kw-textarea" id="kw_ai_prompt" placeholder="Инструкция для нейросети...">${aiConfig.prompt}</textarea>
+                        <textarea class="kw-input kw-textarea" id="kw_ai_prompt" placeholder="Инструкция для нейросети...">${escapeHtml(aiConfig.prompt)}</textarea>
                     </form>
 
                     <button class="kw-btn kw-btn-save" type="button" id="kw_save_all">💾 Сохранить настройки</button>
@@ -634,7 +643,7 @@
                 document.getElementById("kw_tags_container").innerHTML = words
                     .map(
                         (w) =>
-                            `<div class="kw-tag">${w} <span class="kw-tag-rm" data-w="${w}">×</span></div>`,
+                            `<div class="kw-tag">${escapeHtml(w)} <span class="kw-tag-rm" data-w="${escapeHtml(w)}">×</span></div>`,
                     )
                     .join("");
                 document.querySelectorAll(".kw-tag-rm").forEach((btn) => {
@@ -705,7 +714,7 @@
             nodeList.forEach((card) => this.process(card));
         }
         process(card) {
-            const processed = card.getAttribute("data-kw-state");
+            let processed = card.getAttribute("data-kw-state");
             const textContent = (card.innerText || "").toLowerCase();
             const stopWords = this.app.config.getStopWords();
             let isSpam = false;
@@ -713,6 +722,11 @@
             if (stopWords.some((w) => textContent.includes(w))) {
                 isSpam = true;
                 if (processed !== "spam") this.markAsSpam(card);
+            } else if (processed === "spam") {
+                // Стоп-слово убрали в настройках — возвращаем карточку
+                // и обрабатываем её заново, как новую.
+                this.unmarkSpam(card);
+                processed = null;
             }
             if (
                 !processed &&
@@ -745,6 +759,14 @@
             if (this.app.config.get(this.app.config.keys.hideSpam))
                 card.classList.add("kw-hidden");
             card.setAttribute("data-kw-state", "spam");
+        }
+        unmarkSpam(card) {
+            card.classList.remove("kw-spam-card", "kw-hidden");
+            const badge = card.querySelector(".kw-badge-spam");
+            if (badge) badge.remove();
+            const aiBtn = card.querySelector(".kw-ai-btn");
+            if (aiBtn) aiBtn.remove();
+            card.removeAttribute("data-kw-state");
         }
         toggleSpam(hide) {
             document.querySelectorAll(".kw-spam-card").forEach((c) => {
@@ -850,6 +872,7 @@
         addAiBtn(card) {
             const link = card.querySelector(".wants-card__header-title a");
             if (!link) return;
+            if (link.parentNode.querySelector(".kw-ai-btn")) return;
 
             const btn = document.createElement("button");
             btn.className = "kw-ai-btn";
