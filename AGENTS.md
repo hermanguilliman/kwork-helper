@@ -13,7 +13,7 @@ Kwork Helper — a single-file Tampermonkey userscript that enhances the Kwork.r
 ## Code layout (one file, five classes)
 
 - `KworkAssistant` — entrypoint; `init()` wires everything and starts a MutationObserver plus a 500 ms `runLoop()` that reprocesses all cards continuously.
-- `ConfigManager` — settings persisted in browser `localStorage` under `kw_*` keys (never in the repo). Booleans are stored as the literal string `"true"` and read via `get() === "true"`; strings via `getString`/`setString`.
+- `ConfigManager` — settings persisted in browser `localStorage` under `kw_*` keys (never in the repo). Booleans are stored as the literal string `"true"` and read via `get() === "true"`; strings via `getString`/`setString`. Transient session state (e.g. `kw_scroll_pos` for scroll restore) lives in `sessionStorage` and is not a setting.
 - `CardProcessor` — per-card logic: spam marking, price strips, hire-rate badges, AI button.
 - `UIManager` — floating "KH" panel + settings modal; all CSS is injected as the `CSS` template string using `kw-` prefixed classes.
 - `AiClient` — OpenAI-compatible `chat/completions` via `GM_xmlhttpRequest`; `InfiniteScrollManager` — infinite scroll.
@@ -26,6 +26,6 @@ Kwork Helper — a single-file Tampermonkey userscript that enhances the Kwork.r
 - **All user-facing strings are Russian** — UI labels, default prompt, error messages, README. Keep new strings Russian.
 - **Auto-refresh and infinite scroll are mutually exclusive by design**; enabling one disables the other, and auto-refresh literally calls `window.location.reload()`.
 - **Infinite scroll fetches `?page=N` in a hidden iframe** and imports cards with `document.adoptNode`. Loader visibility is managed only by `loadNextPage()`/`onIframeLoad()`/`finishFeed()`; `updateState()` deliberately sets the loader to `display: none` and must not start showing it (it would stay visible permanently).
-- **Keep AI calls on `GM_xmlhttpRequest` and keep `@connect *`** — base URL is user-configurable to any OpenAI-compatible endpoint, so switching to `fetch` or narrowing `@connect` breaks custom setups.
+- **Keep AI calls on `GM_xmlhttpRequest` and keep `@connect *`** — base URL is user-configurable to any OpenAI-compatible endpoint, so switching to `fetch` or narrowing `@connect` breaks custom setups. AI responses are cached per card in memory (`aiCache` on `KworkAssistant`, capped ~200 entries) for the session — re-clicking a card's 🤖 shows the cached answer without a new API call.
 - Threshold defaults live in `DEFAULTS` (goodPrice 3000₽, badPrice 500₽, hire rates 40/20). New settings should follow the `kw_` localStorage key pattern and `ConfigManager` accessor style.
 - Manual test checklist after changes: spam marking/hiding, price strips, hire badges, AI button (needs an API key set in settings), and infinite scroll to the end of the feed ("Заказов больше нет").
