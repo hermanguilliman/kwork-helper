@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Kwork Helper
 // @namespace    http://tampermonkey.net/
-// @version      2.0.7
-// @description  Optimization of Kwork: stats, spam filter, infinite scroll, and AI integration for fast order analysis.
+// @version      2.1.2
+// @description  Optimization of Kwork: stats, competition, sniper mode, author blacklist, fav tags, infinite scroll, and AI pitch generator.
 // @author       Herman Guilliman
 // @updateURL    https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/hermanguilliman/kwork-helper/main/kwork-helper.user.js
@@ -22,14 +22,18 @@
         badPrice: 500,
         goodHireRate: 40,
         badHireRate: 20,
+        goodOffersMax: 3,
+        badOffersMin: 15,
         refreshTime: 60,
 
         aiBaseUrl: "https://api.openai.com/v1",
         aiApiKey: "",
         aiModel: "gpt-4o-mini",
-        aiMaxTokens: 500,
+        aiMaxTokens: 700,
         aiPrompt:
-            "Ты опытный фрилансер. Проанализируй этот заказ. 1. Насколько адекватна цена за такой объем? 2. Есть ли подводные камни? 3. Стоит ли откликаться? Ответь кратко.",
+            "Ты опытный фрилансер на Kwork (лимит откликов — 30 в месяц, нужно беречь каждый). Проанализируй заказ с учетом бюджета, статистики покупателя и числа конкурентов.\nОтветь кратко по пунктам:\n1. Вердикт: [ОТКЛИКАТЬСЯ / ОСТОРОЖНО / ПРОПУСТИТЬ] и почему (адекватность цены за объем, надежность клиента, конкуренция).\n2. Подводные камни: что обязательно уточнить.\n3. Если вердикт не ПРОПУСТИТЬ — напиши короткий цепляющий отклик (2-4 предложения по делу, без воды, с вопросом по задаче) строго внутри тегов <pitch>текст отклика</pitch>.",
+        goodWords: [],
+        stopAuthors: [],
         stopWords: [
             "за отзыв",
             "ради отзыва",
@@ -62,8 +66,28 @@
             .replace(/'/g, "&#39;");
     }
 
-    // Критичные селекторы для диагностики: если Kwork переименует классы,
-    // checkDomHealth() один раз предупредит в консоли.
+    function playNotificationSound() {
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            const ctx = new Ctx();
+            const now = ctx.currentTime;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(587.33, now); // D5
+            osc.frequency.setValueAtTime(880, now + 0.12); // A5
+            gain.gain.setValueAtTime(0.08, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.45);
+        } catch (e) {
+            // Игнорируем блокировку автовоспроизведения браузером
+        }
+    }
+
     const CORE_SELECTORS = {
         ".want-card": "карточки заказов",
         ".wants-card__header-title": "заголовок карточки",
@@ -75,8 +99,6 @@
     const reportedDomBreaks = new Set();
     const reportedSafeErrors = new Set();
 
-    // Изолирует шаг обработки: сбой одной функции не роняет остальные
-    // и не засоряет консоль каждые 500 мс — ошибка логируется один раз.
     function safe(label, fn) {
         try {
             fn();
@@ -89,7 +111,6 @@
         }
     }
 
-    // Ранняя диагностика вёрстки Kwork (вызывается из runLoop с троттлингом).
     function checkDomHealth() {
         if (!document.querySelector(".want-card")) return;
         for (const sel of Object.keys(CORE_SELECTORS)) {
@@ -114,22 +135,22 @@
         pointer-events: none; transform: translateY(-50%);
     }
     .kw-fab {
-        width: 24px; height: 40px; 
+        width: 24px; height: 40px;
         border-radius: 0 8px 8px 0; background: #87B448;
         box-shadow: 2px 2px 8px rgba(0,0,0,0.15);
         cursor: pointer; display: flex; align-items: center; justify-content: center;
         color: #fff; font-weight: 700; font-size: 11px; user-select: none;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); 
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         pointer-events: auto; position: relative;
         opacity: 0.6; transform: translateX(-2px);
     }
-    .kw-fab:hover, #kw_panel.open .kw-fab { 
+    .kw-fab:hover, #kw_panel.open .kw-fab {
         width: 45px; opacity: 1; transform: translateX(0);
         background: linear-gradient(135deg, #87B448 0%, #609438 100%);
         font-size: 13px;
     }
     .kw-menu {
-        background: #fff; width: 240px; border-radius: 8px;
+        background: #fff; width: 250px; border-radius: 8px;
         box-shadow: 4px 4px 20px rgba(0,0,0,0.15); margin-left: 10px;
         border: 1px solid #eee; overflow: hidden;
         opacity: 0; transform: translateX(-20px) scale(0.95);
@@ -143,64 +164,92 @@
     .kw-btn-icon:hover { color: #333; }
     .kw-body { padding: 15px; }
     .kw-opt-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #555; margin-bottom: 12px; }
-    
+
     /* SWITCHES & SLIDERS */
-    .kw-switch { position: relative; width: 36px; height: 20px; }
+    .kw-switch { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
     .kw-switch input { opacity: 0; width: 0; height: 0; }
     .kw-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #e0e0e0; transition: .3s; border-radius: 34px; }
     .kw-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background-color: white; transition: .3s; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
     input:checked + .kw-slider { background-color: #87B448; }
     input:checked + .kw-slider:before { transform: translateX(16px); }
     .kw-timer-status { font-size: 11px; color: #87B448; text-align: center; margin-top: 10px; font-weight: 600; background: #f0f7e6; padding: 4px; border-radius: 4px; }
-    
+
     /* BADGES & STRIPS */
-    .kw-badge { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; margin: 0 4px; }
+    .kw-badge { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; margin: 0 4px; vertical-align: middle; }
     .kw-badge-good { background: #e6f9ed; color: #27ae60; border: 1px solid #c3e6cb; }
     .kw-badge-bad { background: #fdeaea; color: #e74c3c; border: 1px solid #f5c6cb; }
     .kw-badge-mid { background: #fff8e1; color: #f39c12; border: 1px solid #ffeeba; }
     .kw-badge-neutral { background: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; }
+    .kw-badge-fav { background: linear-gradient(135deg, #fff9db 0%, #fff3bf 100%); color: #b47d00; border: 1px solid #ffd43b; box-shadow: 0 1px 3px rgba(255, 212, 59, 0.3); }
+    .kw-badge-new { background: #e7f5ff; color: #1971c2; border: 1px solid #a5d8ff; font-size: 11px; padding: 1px 7px; margin-right: 6px; }
     .kw-badge-spam { background: #f2f2f2; color: #999; border: 1px solid #e0e0e0; margin-bottom: 5px; display:inline-block; font-size: 10px; border-radius: 12px; text-transform: uppercase; padding: 2px 8px; }
-    .kw-strip-good { border-left: 2px solid #58cf7e !important; background: linear-gradient(90deg, rgba(88, 207, 126, 0.03) 0%, #fff 15%) !important; }
-    .kw-strip-bad { border-left: 2px solid #ff6b6b !important; background: linear-gradient(90deg, rgba(255, 107, 107, 0.03) 0%, #fff 15%) !important; }
+
+    .kw-strip-good { border-left: 3px solid #58cf7e !important; background: linear-gradient(90deg, rgba(88, 207, 126, 0.04) 0%, #fff 15%) !important; }
+    .kw-strip-bad { border-left: 3px solid #ff6b6b !important; background: linear-gradient(90deg, rgba(255, 107, 107, 0.04) 0%, #fff 15%) !important; }
+    .kw-strip-fav { box-shadow: 0 0 0 1px #ffd43b, 0 4px 12px rgba(255, 212, 59, 0.15) !important; }
     .kw-spam-card { opacity: 0.4; filter: grayscale(100%); transition: all 0.3s; }
     .kw-spam-card:hover { opacity: 0.9; filter: grayscale(0%); }
     .kw-hidden { display: none !important; }
-    
+
     /* ICONS & UTILS */
     .kw-urgent-fire { font-size: 14px; margin-right: 5px; animation: pulse 1.5s infinite; cursor: help; }
-    
+    .kw-block-user-btn {
+        cursor: pointer; border: none; background: none; font-size: 12px; padding: 0 4px;
+        margin-left: 4px; opacity: 0.35; transition: opacity 0.2s, transform 0.2s; vertical-align: middle;
+    }
+    .kw-block-user-btn:hover { opacity: 1; transform: scale(1.2); }
+
     /* MODAL SETTINGS */
     .kw-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999995; display: flex; align-items: center; justify-content: center; opacity: 0; visibility: hidden; transition: 0.2s; }
     .kw-overlay.open { opacity: 1; visibility: visible; }
-    .kw-modal { background: #fff; width: 500px; max-height: 90vh; overflow-y: auto; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); transform: translateY(20px); transition: 0.3s; }
+    .kw-modal { background: #fff; width: 540px; max-height: 90vh; overflow-y: auto; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); transform: translateY(20px); transition: 0.3s; }
     .kw-overlay.open .kw-modal { transform: translateY(0); }
-    .kw-modal-title { font-size: 18px; font-weight: bold; margin-bottom: 20px; color: #333; display:flex; justify-content:space-between; border-bottom: 1px solid #eee; padding-bottom: 10px;}
+    .kw-modal-title { font-size: 18px; font-weight: bold; margin-bottom: 16px; color: #333; display:flex; justify-content:space-between; border-bottom: 1px solid #eee; padding-bottom: 10px;}
     .kw-modal-close { cursor: pointer; color: #999; }
-    .kw-section-title { font-size: 14px; font-weight: 700; color: #555; margin: 15px 0 10px; display: block; }
-    .kw-input-group { display: flex; gap: 10px; margin-bottom: 10px; }
+    .kw-section-head { display: flex; justify-content: space-between; align-items: center; margin: 15px 0 8px; }
+    .kw-section-title { font-size: 13px; font-weight: 700; color: #444; margin: 15px 0 8px; display: block; }
+    .kw-section-head .kw-section-title { margin: 0; }
+    .kw-link-btn { background: none; border: none; color: #3498db; font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline; }
+    .kw-link-btn:hover { color: #1d6fa5; }
+    .kw-input-group { display: flex; gap: 10px; margin-bottom: 8px; }
     .kw-input { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; outline: none; transition: 0.2s; font-size: 13px; width: 100%; box-sizing: border-box; }
     .kw-input:focus { border-color: #87B448; }
-    .kw-textarea { width: 100%; height: 80px; resize: vertical; font-family: sans-serif; }
+    .kw-textarea { width: 100%; height: 95px; resize: vertical; font-family: sans-serif; }
     .kw-btn { background: #87B448; color: #fff; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; transition: 0.2s; font-size: 13px; }
     .kw-btn:hover { background: #609438; }
     .kw-btn-save { width: 100%; margin-top: 20px; padding: 12px; font-size: 14px; }
-    .kw-tags { display: flex; flex-wrap: wrap; gap: 6px; max-height: 100px; overflow-y: auto; padding: 10px; background: #f9f9f9; border-radius: 8px; border: 1px solid #eee; }
-    .kw-tag { background: #fff; border: 1px solid #ddd; padding: 5px 12px; border-radius: 20px; font-size: 12px; color: #555; display: flex; align-items: center; gap: 6px; }
+    .kw-tags { display: flex; flex-wrap: wrap; gap: 6px; max-height: 85px; overflow-y: auto; padding: 8px; background: #f9f9f9; border-radius: 8px; border: 1px solid #eee; min-height: 36px; }
+    .kw-tag { background: #fff; border: 1px solid #ddd; padding: 4px 10px; border-radius: 20px; font-size: 12px; color: #555; display: flex; align-items: center; gap: 6px; }
+    .kw-tag-fav { background: #fff9db; border-color: #ffd43b; color: #8c6200; }
     .kw-tag-rm { cursor: pointer; color: #ff4757; font-weight: bold; }
-    
-    /* AI & BUTTONS */
-    .kw-ai-btn { 
-        cursor: pointer; margin-left: 8px; font-size: 16px; background: none; border: none; padding: 0; 
-        transition: transform 0.2s; filter: grayscale(100%); opacity: 0.6;
+
+    /* AI & PITCH BOX */
+    .kw-ai-btn {
+        cursor: pointer; margin-left: 8px; font-size: 16px; background: none; border: none; padding: 0;
+        transition: transform 0.2s; filter: grayscale(100%); opacity: 0.6; vertical-align: middle;
     }
     .kw-ai-btn:hover { transform: scale(1.2); filter: grayscale(0%); opacity: 1; }
     .kw-ai-btn.loading { animation: kw-ai-pulse 1.2s ease-in-out infinite; pointer-events: none; }
     .kw-ai-response-box {
-        margin-top: 12px; padding: 12px; border-radius: 8px; 
+        margin-top: 12px; padding: 12px; border-radius: 8px;
         background: #f4f8fb; border: 1px solid #dcebf7; color: #2c3e50; font-size: 13px;
         line-height: 1.5; white-space: pre-wrap; position: relative;
     }
-    .kw-ai-response-box::before { content: "🤖 Нейросеть:"; display: block; font-weight: bold; color: #3498db; margin-bottom: 6px; }
+    .kw-ai-response-box::before { content: "🤖 Анализ нейросети:"; display: block; font-weight: bold; color: #3498db; margin-bottom: 6px; }
+    .kw-ai-pitch-box {
+        margin-top: 10px; padding: 10px 12px; border-radius: 6px;
+        background: #fff; border: 1px dashed #87B448; color: #222;
+    }
+    .kw-ai-pitch-head {
+        display: flex; justify-content: space-between; align-items: center;
+        font-weight: 700; font-size: 12px; color: #609438; margin-bottom: 6px;
+    }
+    .kw-copy-pitch-btn {
+        background: #e6f9ed; color: #27ae60; border: 1px solid #c3e6cb;
+        border-radius: 6px; padding: 3px 10px; font-size: 11px; font-weight: 600;
+        cursor: pointer; transition: 0.2s;
+    }
+    .kw-copy-pitch-btn:hover { background: #27ae60; color: #fff; }
     .kw-ai-error { background: #fff5f5; border-color: #ffcccc; color: #c0392b; }
     .kw-ai-error::before { content: "❌ Ошибка:"; color: #c0392b; }
 
@@ -221,7 +270,10 @@
         constructor() {
             this.keys = {
                 stopWords: "kw_stop_words",
+                goodWords: "kw_good_words",
+                stopAuthors: "kw_stop_authors",
                 autoRefresh: "kw_autorefresh",
+                sniperMode: "kw_sniper_mode",
                 hideSpam: "kw_hide_spam",
                 infiniteScroll: "kw_infinite_scroll",
                 aiBaseUrl: "kw_ai_base_url",
@@ -243,15 +295,37 @@
         setString(key, val) {
             localStorage.setItem(key, val);
         }
+        getList(key, defaultList) {
+            try {
+                const raw = localStorage.getItem(key);
+                return raw ? JSON.parse(raw) : defaultList;
+            } catch (e) {
+                return defaultList;
+            }
+        }
+        setList(key, list) {
+            localStorage.setItem(key, JSON.stringify(list));
+        }
 
         getStopWords() {
-            return (
-                JSON.parse(localStorage.getItem(this.keys.stopWords)) ||
-                DEFAULTS.stopWords
-            );
+            return this.getList(this.keys.stopWords, DEFAULTS.stopWords);
         }
         setStopWords(words) {
-            localStorage.setItem(this.keys.stopWords, JSON.stringify(words));
+            this.setList(this.keys.stopWords, words);
+        }
+
+        getGoodWords() {
+            return this.getList(this.keys.goodWords, DEFAULTS.goodWords);
+        }
+        setGoodWords(words) {
+            this.setList(this.keys.goodWords, words);
+        }
+
+        getStopAuthors() {
+            return this.getList(this.keys.stopAuthors, DEFAULTS.stopAuthors);
+        }
+        setStopAuthors(authors) {
+            this.setList(this.keys.stopAuthors, authors);
         }
 
         getAiConfig() {
@@ -264,6 +338,7 @@
                 model: this.getString(this.keys.aiModel, DEFAULTS.aiModel),
                 maxTokens: parseInt(
                     this.getString(this.keys.aiMaxTokens, DEFAULTS.aiMaxTokens),
+                    10,
                 ),
                 prompt: this.getString(this.keys.aiPrompt, DEFAULTS.aiPrompt),
             };
@@ -356,7 +431,7 @@
                             reject(e);
                         }
                     },
-                    onerror: (err) => {
+                    onerror: () => {
                         reject(new Error("Ошибка сети / Connection Error"));
                     },
                     ontimeout: () => {
@@ -383,7 +458,7 @@
         }
         init() {
             const params = new URLSearchParams(window.location.search);
-            this.page = parseInt(params.get("page")) || 1;
+            this.page = parseInt(params.get("page"), 10) || 1;
             this.loader = document.createElement("div");
             this.loader.className = "kw-loader";
             this.loader.innerHTML = "⏳ Загрузка заказов...";
@@ -418,7 +493,6 @@
             pags.forEach((el) => {
                 el.style.display = this.isEnabled ? "none" : "";
             });
-            // Loader visibility is managed by loadNextPage()/onIframeLoad()/finishFeed()
             if (this.loader) this.loader.style.display = "none";
         }
         onScroll() {
@@ -456,6 +530,11 @@
             if (!card) return "";
             const id = card.getAttribute("data-id");
             if (id) return "ID:" + id;
+            const link = card.querySelector(".wants-card__header-title a");
+            if (link && link.href) {
+                const m = link.href.match(/\/projects\/(\d+)/);
+                if (m) return "ID:" + m[1];
+            }
             const title = card.querySelector(".wants-card__header-title");
             const price = card.querySelector(".wants-card__price");
             return (
@@ -493,6 +572,12 @@
                         newCards.forEach((card) => {
                             const importedCard = document.adoptNode(card);
                             importedCard.removeAttribute("data-kw-state");
+                            importedCard.removeAttribute("data-kw-stats");
+                            importedCard.removeAttribute("data-kw-comp");
+                            importedCard.setAttribute(
+                                "data-kw-from-scroll",
+                                "1",
+                            );
                             const oldAi =
                                 importedCard.querySelector(".kw-ai-btn");
                             if (oldAi) oldAi.remove();
@@ -551,13 +636,17 @@
                 this.app.infinite.toggle(false);
             }
             const isHide = this.app.config.get(this.app.config.keys.hideSpam);
+            const isSniper = this.app.config.get(
+                this.app.config.keys.sniperMode,
+            );
             div.innerHTML = `
             <div class="kw-fab" id="kw_fab_btn">KH</div>
             <div class="kw-menu">
-                <div class="kw-head"><span class="kw-title">Kwork Helper 2.0</span><span class="kw-btn-icon" id="kw_btn_settings">⚙️</span></div>
+                <div class="kw-head"><span class="kw-title">Kwork Helper 2.1</span><span class="kw-btn-icon" id="kw_btn_settings" title="Настройки">⚙️</span></div>
                 <div class="kw-body">
                     <div class="kw-opt-row"><span>Авто-обновление</span><label class="kw-switch"><input type="checkbox" id="kw_inp_auto" ${isAuto ? "checked" : ""}><span class="kw-slider"></span></label></div>
-                    <div class="kw-opt-row"><span>Скрывать спам</span><label class="kw-switch"><input type="checkbox" id="kw_inp_spam" ${isHide ? "checked" : ""}><span class="kw-slider"></span></label></div>
+                    <div class="kw-opt-row"><span title="Пуш-уведомления со звуком о новых выгодных заказах">🎯 Снайпер-пуши</span><label class="kw-switch"><input type="checkbox" id="kw_inp_sniper" ${isSniper ? "checked" : ""}><span class="kw-slider"></span></label></div>
+                    <div class="kw-opt-row"><span>Скрывать спам и ЧС</span><label class="kw-switch"><input type="checkbox" id="kw_inp_spam" ${isHide ? "checked" : ""}><span class="kw-slider"></span></label></div>
                     <div class="kw-opt-row"><span>Бесконечная лента</span><label class="kw-switch"><input type="checkbox" id="kw_inp_inf" ${isInf ? "checked" : ""}><span class="kw-slider"></span></label></div>
                     <div id="kw_timer_txt" class="kw-timer-status" style="display: ${isAuto ? "block" : "none"}">Обновление: ${this.timeLeft}с</div>
                 </div>
@@ -570,8 +659,10 @@
         bindEvents() {
             const fab = document.getElementById("kw_fab_btn");
             const autoInp = document.getElementById("kw_inp_auto");
+            const sniperInp = document.getElementById("kw_inp_sniper");
             const infInp = document.getElementById("kw_inp_inf");
             const spamInp = document.getElementById("kw_inp_spam");
+
             fab.addEventListener("click", () =>
                 this.panel.classList.toggle("open"),
             );
@@ -596,6 +687,15 @@
                     window.location.reload();
                 } else {
                     this.updateTimerUI();
+                }
+            });
+            sniperInp.addEventListener("change", (e) => {
+                this.app.config.set(
+                    this.app.config.keys.sniperMode,
+                    e.target.checked,
+                );
+                if (e.target.checked) {
+                    playNotificationSound();
                 }
             });
             infInp.addEventListener("change", (e) => {
@@ -655,23 +755,40 @@
             <div class="kw-overlay open" id="kw_settings">
                 <div class="kw-modal">
                     <div class="kw-modal-title"><span>⚙️ Настройки Kwork Helper</span><span class="kw-modal-close" id="kw_modal_close">✕</span></div>
-                    
-                    <span class="kw-section-title">Фильтр стоп-слов</span>
+
+                    <span class="kw-section-title">⭐ Маркер «Моё» (любимые ключевые слова / ваш стек)</span>
                     <div class="kw-input-group">
-                        <input type="text" class="kw-input" id="kw_word_inp" placeholder="Фраза (Enter)...">
+                        <input type="text" class="kw-input" id="kw_good_inp" placeholder="Напр.: парсинг, python, верстка, бот (Enter)...">
+                        <button class="kw-btn" id="kw_good_add">+</button>
+                    </div>
+                    <div class="kw-tags" id="kw_good_tags_container"></div>
+
+                    <span class="kw-section-title">🛑 Фильтр стоп-слов</span>
+                    <div class="kw-input-group">
+                        <input type="text" class="kw-input" id="kw_word_inp" placeholder="Стоп-фраза (Enter)...">
                         <button class="kw-btn" id="kw_word_add">+</button>
                     </div>
                     <div class="kw-tags" id="kw_tags_container"></div>
 
+                    <span class="kw-section-title">🚫 Чёрный список заказчиков (логины)</span>
+                    <div class="kw-input-group">
+                        <input type="text" class="kw-input" id="kw_author_inp" placeholder="Логин покупателя (или жмите 🚫 в карточке)...">
+                        <button class="kw-btn" id="kw_author_add">+</button>
+                    </div>
+                    <div class="kw-tags" id="kw_author_tags_container"></div>
+
                     <form onsubmit="return false;" autocomplete="off">
-                        <span class="kw-section-title">Настройки нейросети (OpenAI / OpenRouter)</span>
+                        <span class="kw-section-title">🤖 Настройки нейросети (OpenAI / OpenRouter)</span>
                         <div class="kw-input-group"><input type="text" class="kw-input" id="kw_ai_base" placeholder="Base URL" value="${escapeHtml(aiConfig.baseUrl)}" autocomplete="url" name="ai_base_url"></div>
                         <div class="kw-input-group"><input type="password" class="kw-input" id="kw_ai_key" placeholder="API Key" value="${escapeHtml(aiConfig.apiKey)}" autocomplete="new-password" name="ai_api_key"></div>
                         <div class="kw-input-group">
                             <input type="text" class="kw-input" id="kw_ai_model" placeholder="Model (e.g. gpt-4o-mini)" value="${escapeHtml(aiConfig.model)}" autocomplete="off" name="ai_model">
                             <input type="number" class="kw-input" id="kw_ai_tokens" placeholder="Max Tokens" value="${escapeHtml(aiConfig.maxTokens)}" title="Лимит токенов" style="max-width: 100px;" autocomplete="off" name="ai_tokens">
                         </div>
-                        <span class="kw-section-title">Системный промпт</span>
+                        <div class="kw-section-head">
+                            <span class="kw-section-title">Системный промпт</span>
+                            <button type="button" class="kw-link-btn" id="kw_reset_prompt">🔄 Вставить промпт v2.1 (с черновиком отклика)</button>
+                        </div>
                         <textarea class="kw-input kw-textarea" id="kw_ai_prompt" placeholder="Инструкция для нейросети...">${escapeHtml(aiConfig.prompt)}</textarea>
                     </form>
 
@@ -686,49 +803,83 @@
                 if (e.target === overlay) overlay.remove();
             });
 
-            const renderWords = () => {
-                const words = this.app.config.getStopWords();
-                document.getElementById("kw_tags_container").innerHTML = words
-                    .map(
-                        (w) =>
-                            `<div class="kw-tag">${escapeHtml(w)} <span class="kw-tag-rm" data-w="${escapeHtml(w)}">×</span></div>`,
-                    )
-                    .join("");
-                document.querySelectorAll(".kw-tag-rm").forEach((btn) => {
-                    btn.onclick = () => {
-                        this.app.config.setStopWords(
-                            this.app.config
-                                .getStopWords()
-                                .filter((x) => x !== btn.dataset.w),
-                        );
-                        this.app.reprocessAll();
-                        renderWords();
-                    };
-                });
-            };
-            const addWord = () => {
-                const val = document
-                    .getElementById("kw_word_inp")
-                    .value.trim()
-                    .toLowerCase();
-                if (!val) return;
-                const words = this.app.config.getStopWords();
-                if (!words.includes(val)) {
-                    words.push(val);
-                    this.app.config.setStopWords(words);
-                    this.app.reprocessAll();
-                    renderWords();
-                }
-                document.getElementById("kw_word_inp").value = "";
+            const setupTagList = (
+                containerId,
+                inputId,
+                addBtnId,
+                getter,
+                setter,
+                extraClass = "",
+            ) => {
+                const render = () => {
+                    const items = getter();
+                    const container = document.getElementById(containerId);
+                    container.innerHTML = items
+                        .map(
+                            (w) =>
+                                `<div class="kw-tag ${extraClass}">${escapeHtml(w)} <span class="kw-tag-rm" data-w="${escapeHtml(w)}">×</span></div>`,
+                        )
+                        .join("");
+                    container.querySelectorAll(".kw-tag-rm").forEach((btn) => {
+                        btn.onclick = () => {
+                            setter(getter().filter((x) => x !== btn.dataset.w));
+                            this.app.reprocessAll(true);
+                            render();
+                        };
+                    });
+                };
+                const add = () => {
+                    const inp = document.getElementById(inputId);
+                    const val = inp.value.trim().toLowerCase();
+                    if (!val) return;
+                    const items = getter();
+                    if (!items.includes(val)) {
+                        items.push(val);
+                        setter(items);
+                        this.app.reprocessAll(true);
+                        render();
+                    }
+                    inp.value = "";
+                };
+                document.getElementById(addBtnId).onclick = add;
+                document.getElementById(inputId).onkeypress = (e) => {
+                    if (e.key === "Enter") add();
+                };
+                render();
             };
 
-            document.getElementById("kw_word_add").onclick = addWord;
-            document.getElementById("kw_word_inp").onkeypress = (e) => {
-                if (e.key === "Enter") addWord();
+            setupTagList(
+                "kw_good_tags_container",
+                "kw_good_inp",
+                "kw_good_add",
+                () => this.app.config.getGoodWords(),
+                (v) => this.app.config.setGoodWords(v),
+                "kw-tag-fav",
+            );
+            setupTagList(
+                "kw_tags_container",
+                "kw_word_inp",
+                "kw_word_add",
+                () => this.app.config.getStopWords(),
+                (v) => this.app.config.setStopWords(v),
+            );
+            setupTagList(
+                "kw_author_tags_container",
+                "kw_author_inp",
+                "kw_author_add",
+                () => this.app.config.getStopAuthors(),
+                (v) => this.app.config.setStopAuthors(v),
+            );
+
+            document.getElementById("kw_reset_prompt").onclick = () => {
+                document.getElementById("kw_ai_prompt").value =
+                    DEFAULTS.aiPrompt;
+                document.getElementById("kw_ai_tokens").value =
+                    DEFAULTS.aiMaxTokens;
             };
 
             document.getElementById("kw_modal_close").onclick = () =>
-                document.querySelector(".kw-overlay").remove();
+                overlay.remove();
             document.getElementById("kw_save_all").onclick = () => {
                 const newAiConfig = {
                     baseUrl: document.getElementById("kw_ai_base").value.trim(),
@@ -747,10 +898,8 @@
                     title: "Kwork Helper",
                     timeout: 2000,
                 });
-                document.querySelector(".kw-overlay").remove();
+                overlay.remove();
             };
-
-            renderWords();
         }
     }
 
@@ -761,28 +910,60 @@
         processBatch(nodeList) {
             nodeList.forEach((card) => this.process(card));
         }
+        extractAuthor(card) {
+            const userLink = card.querySelector('a[href*="/user/"]');
+            if (!userLink) return { username: null, linkEl: null };
+            const href = userLink.getAttribute("href") || "";
+            const match = href.match(/\/user\/([^/?#]+)/i);
+            const username = (
+                match ? match[1] : userLink.textContent.trim()
+            ).toLowerCase();
+            return { username, linkEl: userLink };
+        }
         process(card) {
-            let processed = card.getAttribute("data-kw-state");
-            const textContent = (card.innerText || "").toLowerCase();
-            let isSpam = false;
+            if (card.hasAttribute("data-kw-state")) {
+                if (card.dataset.kwStats !== "1") {
+                    safe("статистика", () => this.forceReplaceStats(card));
+                }
+                if (card.dataset.kwComp !== "1") {
+                    safe("конкуренция", () => this.highlightCompetition(card));
+                }
+                return;
+            }
 
-            safe("спам-фильтр", () => {
+            const textContent = (card.innerText || "").toLowerCase();
+            const { username, linkEl } = this.extractAuthor(card);
+            if (username) card.dataset.kwAuthor = username;
+
+            let isSpam = false;
+            let spamReason = "spam";
+
+            safe("спам и ЧС фильтр", () => {
+                const stopAuthors = this.app.config.getStopAuthors();
                 const stopWords = this.app.config.getStopWords();
-                if (stopWords.some((w) => textContent.includes(w))) {
+
+                if (username && stopAuthors.includes(username)) {
                     isSpam = true;
-                    if (processed !== "spam") this.markAsSpam(card);
-                } else if (processed === "spam") {
-                    // Стоп-слово убрали в настройках — возвращаем карточку
-                    // и обрабатываем её заново, как новую.
-                    this.unmarkSpam(card);
-                    processed = null;
+                    spamReason = `ЧС: @${username}`;
+                } else if (stopWords.some((w) => textContent.includes(w))) {
+                    isSpam = true;
+                    spamReason = "spam";
+                }
+
+                if (isSpam) {
+                    this.markAsSpam(card, spamReason);
                 }
             });
 
-            if (
-                !processed &&
-                DEFAULTS.urgentWords.some((w) => textContent.includes(w))
-            ) {
+            safe("кнопка ЧС автора", () =>
+                this.addBlockAuthorBtn(card, username, linkEl),
+            );
+            safe("статистика", () => this.forceReplaceStats(card));
+            safe("конкуренция", () => this.highlightCompetition(card));
+            safe("цена", () => this.highlightPrice(card));
+            safe("маркер Моё", () => this.highlightFavWords(card, textContent));
+
+            if (DEFAULTS.urgentWords.some((w) => textContent.includes(w))) {
                 safe("срочность", () => {
                     const title = card.querySelector(
                         ".wants-card__header-title",
@@ -794,14 +975,63 @@
                         );
                 });
             }
-            safe("статистика", () => this.forceReplaceStats(card));
-            if (!processed) {
-                safe("цена", () => this.highlightPrice(card));
-                safe("AI-кнопка", () => this.addAiBtn(card));
-                if (!isSpam) card.setAttribute("data-kw-state", "active");
+
+            safe("AI-кнопка", () => this.addAiBtn(card));
+
+            if (!isSpam) {
+                card.setAttribute("data-kw-state", "active");
+            }
+            safe("снайпер-проверка", () =>
+                this.app.checkNewAndSniper(card, isSpam),
+            );
+        }
+
+        addBlockAuthorBtn(card, username, linkEl) {
+            if (!username || !linkEl) return;
+            if (card.querySelector(".kw-block-user-btn")) return;
+
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "kw-block-user-btn";
+            btn.innerHTML = "🚫";
+            btn.title = `В чёрный список: скрывать заказы от @${username}`;
+            btn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const list = this.app.config.getStopAuthors();
+                if (!list.includes(username)) {
+                    list.push(username);
+                    this.app.config.setStopAuthors(list);
+                    this.app.reprocessAll(true);
+                    GM_notification({
+                        title: "Kwork Helper: Чёрный список",
+                        text: `Заказчик @${username} добавлен в чёрный список`,
+                        timeout: 2500,
+                    });
+                }
+            };
+            linkEl.insertAdjacentElement("afterend", btn);
+        }
+
+        highlightFavWords(card, textContent) {
+            const goodWords = this.app.config.getGoodWords();
+            if (!goodWords.length) return;
+            const matched = goodWords.filter((w) => textContent.includes(w));
+            if (!matched.length) return;
+
+            card.dataset.kwFav = matched.join(", ");
+            card.classList.add("kw-strip-fav");
+
+            const title = card.querySelector(".wants-card__header-title");
+            if (title && !title.querySelector(".kw-badge-fav")) {
+                title.insertAdjacentHTML(
+                    "afterbegin",
+                    `<span class="kw-badge kw-badge-fav" title="Найдены ваши ключевые слова">⭐ Моё: ${escapeHtml(matched.slice(0, 3).join(", "))}</span>`,
+                );
             }
         }
-        markAsSpam(card) {
+
+        markAsSpam(card, labelText = "spam") {
             card.classList.add("kw-spam-card");
             const header = card.querySelector(
                 ".wants-card__header-right-block",
@@ -809,29 +1039,44 @@
             if (header && !card.querySelector(".kw-badge-spam"))
                 header.insertAdjacentHTML(
                     "afterbegin",
-                    '<div class="kw-badge kw-badge-spam">spam</div>',
+                    `<div class="kw-badge kw-badge-spam">${escapeHtml(labelText)}</div>`,
                 );
             if (this.app.config.get(this.app.config.keys.hideSpam))
                 card.classList.add("kw-hidden");
             card.setAttribute("data-kw-state", "spam");
         }
+
         unmarkSpam(card) {
             card.classList.remove("kw-spam-card", "kw-hidden");
             const badge = card.querySelector(".kw-badge-spam");
             if (badge) badge.remove();
-            const aiBtn = card.querySelector(".kw-ai-btn");
-            if (aiBtn) aiBtn.remove();
             card.removeAttribute("data-kw-state");
         }
+
         toggleSpam(hide) {
             document.querySelectorAll(".kw-spam-card").forEach((c) => {
                 if (hide) c.classList.add("kw-hidden");
                 else c.classList.remove("kw-hidden");
             });
         }
+
         forceReplaceStats(card) {
             const statsBlock = card.querySelector(".want-payer-statistic");
-            if (!statsBlock || statsBlock.querySelector(".kw-badge")) return;
+            if (!statsBlock) return;
+            if (statsBlock.querySelector(".kw-hire-badge")) {
+                card.dataset.kwStats = "1";
+                return;
+            }
+
+            const fullStatsText = statsBlock.textContent || "";
+            const hireMatch = fullStatsText.match(/Нанято:\s*(\d+)%/i);
+            const projMatch = fullStatsText.match(
+                /(?:Открыто|Размещено)?\s*проектов:\s*(\d+)/i,
+            );
+            if (projMatch) {
+                card.dataset.kwProjects = String(parseInt(projMatch[1], 10));
+            }
+
             let textNode = null;
             const walker = document.createTreeWalker(
                 statsBlock,
@@ -843,10 +1088,12 @@
                     break;
                 }
             }
-            const hireMatch = statsBlock.textContent.match(/Нанято:\s*(\d+)%/);
+
             let badgeHTML = "";
             if (hireMatch) {
-                const p = parseInt(hireMatch[1]);
+                const p = parseInt(hireMatch[1], 10);
+                card.dataset.kwHireRate = String(p);
+
                 const type =
                     p < DEFAULTS.badHireRate
                         ? "bad"
@@ -861,29 +1108,168 @@
                           : "Средне";
                 const icon =
                     type === "bad" ? "⚠️" : type === "good" ? "🛡️" : "⚖️";
-                badgeHTML = `<span class="kw-badge kw-badge-${type}">${icon} ${label} (${p}%)</span>`;
+                badgeHTML = `<span class="kw-badge kw-badge-${type} kw-hire-badge">${icon} ${label} (${p}% нанятых)</span>`;
             } else {
-                badgeHTML = `<span class="kw-badge kw-badge-neutral">❓ Нет данных</span>`;
+                badgeHTML = `<span class="kw-badge kw-badge-neutral kw-hire-badge">❓ Нет данных</span>`;
             }
+
             if (textNode) {
+                // Если родительский узел содержит только "Нанято: 70%" или "Нанято:", заменяем его целиком
+                let targetNode = textNode;
+                if (
+                    textNode.parentNode &&
+                    textNode.parentNode !== statsBlock &&
+                    /^Нанято:?\s*(\d+%\s*)?$/i.test(
+                        textNode.parentNode.textContent.trim(),
+                    )
+                ) {
+                    targetNode = textNode.parentNode;
+                }
+
                 const span = document.createElement("span");
                 span.innerHTML = badgeHTML;
-                textNode.parentNode.replaceChild(span, textNode);
-                let next = span.nextSibling;
-                if (next && next.textContent && next.textContent.includes("%"))
-                    next.remove();
+                targetNode.parentNode.replaceChild(span, targetNode);
+
+                // Удаляем оставшийся "хвост" с процентами (даже через пробелы или комментарии Vue)
+                let cur = span.nextSibling;
+                while (cur) {
+                    const next = cur.nextSibling;
+                    if (
+                        cur.nodeType === Node.COMMENT_NODE ||
+                        (cur.nodeType === Node.TEXT_NODE &&
+                            cur.nodeValue.trim() === "")
+                    ) {
+                        cur = next;
+                        continue;
+                    }
+                    if (
+                        cur.textContent &&
+                        /^\s*:?\s*\d+%\s*$/.test(cur.textContent)
+                    ) {
+                        cur.remove();
+                    } else if (
+                        cur.nodeType === Node.TEXT_NODE &&
+                        /^\s*:?\s*\d+%/.test(cur.nodeValue)
+                    ) {
+                        cur.nodeValue = cur.nodeValue.replace(
+                            /^\s*:?\s*\d+%\s*/,
+                            "",
+                        );
+                    }
+                    break;
+                }
             } else {
                 const container = statsBlock.querySelector(
                     ".dib.v-align-t:last-child",
                 );
-                if (container && !container.querySelector(".kw-badge")) {
+                if (container && !container.querySelector(".kw-hire-badge")) {
                     const div = document.createElement("div");
                     div.innerHTML = badgeHTML;
                     div.style.marginTop = "4px";
                     container.appendChild(div);
                 }
             }
+            card.dataset.kwStats = "1";
         }
+
+        highlightCompetition(card) {
+            if (card.querySelector(".kw-comp-badge")) {
+                card.dataset.kwComp = "1";
+                return;
+            }
+
+            const walker = document.createTreeWalker(
+                card,
+                NodeFilter.SHOW_TEXT,
+            );
+            let textNode = null;
+            while (walker.nextNode()) {
+                if (walker.currentNode.nodeValue.includes("Предложений")) {
+                    textNode = walker.currentNode;
+                    break;
+                }
+            }
+            if (!textNode) return;
+
+            let targetNode = textNode;
+            if (
+                textNode.parentNode &&
+                textNode.parentNode !== card &&
+                /^Предложений:?\s*(\d+|нет)?\s*$/i.test(
+                    textNode.parentNode.textContent.trim(),
+                )
+            ) {
+                targetNode = textNode.parentNode;
+            }
+
+            const combinedText =
+                targetNode.textContent +
+                " " +
+                (targetNode.nextSibling
+                    ? targetNode.nextSibling.textContent || ""
+                    : "") +
+                " " +
+                (targetNode.nextElementSibling
+                    ? targetNode.nextElementSibling.textContent || ""
+                    : "");
+            const match = combinedText.match(/Предложений:?\s*(\d+|нет)/i);
+            if (!match) return;
+
+            const count =
+                match[1].toLowerCase() === "нет"
+                    ? 0
+                    : parseInt(match[1], 10) || 0;
+            card.dataset.kwOffers = String(count);
+
+            let type = "mid";
+            let icon = "👥";
+
+            if (count <= DEFAULTS.goodOffersMax) {
+                type = "good";
+                icon = "🎯";
+            } else if (count >= DEFAULTS.badOffersMin) {
+                type = "bad";
+                icon = "🔥";
+            }
+
+            const span = document.createElement("span");
+            span.className = `kw-badge kw-badge-${type} kw-comp-badge`;
+            span.textContent = `${icon} Предложений: ${count}`;
+
+            targetNode.parentNode.replaceChild(span, targetNode);
+
+            // Удаляем оставшийся "хвост" с числом откликов, если он был в соседнем узле
+            let cur = span.nextSibling;
+            while (cur) {
+                const next = cur.nextSibling;
+                if (
+                    cur.nodeType === Node.COMMENT_NODE ||
+                    (cur.nodeType === Node.TEXT_NODE &&
+                        cur.nodeValue.trim() === "")
+                ) {
+                    cur = next;
+                    continue;
+                }
+                if (
+                    cur.textContent &&
+                    /^\s*:?\s*(\d+|нет)\s*$/i.test(cur.textContent)
+                ) {
+                    cur.remove();
+                } else if (
+                    cur.nodeType === Node.TEXT_NODE &&
+                    /^\s*:?\s*(\d+|нет)\b/i.test(cur.nodeValue)
+                ) {
+                    cur.nodeValue = cur.nodeValue.replace(
+                        /^\s*:?\s*(\d+|нет)\s*/i,
+                        "",
+                    );
+                }
+                break;
+            }
+
+            card.dataset.kwComp = "1";
+        }
+
         highlightPrice(card) {
             const isLowPriceLabel = card.querySelector(
                 ".wants-card__review--low-price",
@@ -907,6 +1293,7 @@
                         priceEl.textContent
                             .replace(/\s/g, "")
                             .replace(/\D/g, ""),
+                        10,
                     ) || 0;
             }
             if (higherPriceEl) {
@@ -915,15 +1302,18 @@
                         higherPriceEl.textContent
                             .replace(/\s/g, "")
                             .replace(/\D/g, ""),
+                        10,
                     ) || 0;
             }
             const effectivePrice = Math.max(price, higherPrice);
+            card.dataset.kwPrice = String(effectivePrice);
 
             if (effectivePrice >= DEFAULTS.goodPrice)
                 card.classList.add("kw-strip-good");
             else if (effectivePrice <= DEFAULTS.badPrice && effectivePrice > 0)
                 card.classList.add("kw-strip-bad");
         }
+
         addAiBtn(card) {
             const link = card.querySelector(".wants-card__header-title a");
             if (!link) return;
@@ -932,7 +1322,7 @@
             const btn = document.createElement("button");
             btn.className = "kw-ai-btn";
             btn.innerHTML = "🤖";
-            btn.title = "Анализ нейросетью";
+            btn.title = "Анализ нейросетью + генерация отклика";
 
             btn.onclick = async (e) => {
                 e.preventDefault();
@@ -953,7 +1343,7 @@
                     descBlock.querySelector(".overflow-hidden")
                         ?.nextElementSibling || descBlock;
                 const fullText = fullTextEl.innerText;
-                const title = link.innerText;
+                const title = link.innerText.trim();
 
                 let priceText = "Бюджет не указан";
                 const priceBlock = card.querySelector(".wants-card__right");
@@ -963,16 +1353,26 @@
                         .trim();
                 }
 
-                const fullPrompt = `Заголовок: ${title}\n\nБюджет (инфо): ${priceText}\n\nОписание:\n${fullText}`;
+                const hireRate = card.dataset.kwHireRate
+                    ? `${card.dataset.kwHireRate}%`
+                    : "Нет данных (новичок)";
+                const projectsCount = card.dataset.kwProjects
+                    ? `${card.dataset.kwProjects} проектов`
+                    : "Неизвестно";
+                const offersCount = card.dataset.kwOffers
+                    ? `${card.dataset.kwOffers} откликов`
+                    : "Неизвестно";
 
-                // Кэш ответов на сессию: повторный клик по той же карточке
-                // не тратит токены и не ждёт сеть.
+                const fullPrompt = [
+                    `Заголовок: ${title}`,
+                    `Бюджет: ${priceText}`,
+                    `Статистика заказчика: Нанято ${hireRate}, размещено ${projectsCount}`,
+                    `Конкуренция по заказу: уже подано ${offersCount}`,
+                    `Описание задачи:\n${fullText}`,
+                ].join("\n\n");
+
                 const cacheKey =
-                    (card.getAttribute("data-id") || "") +
-                    "|" +
-                    title +
-                    "|" +
-                    priceText;
+                    this.app.infinite.getCardSignature(card) + "|" + priceText;
                 const cached = this.app.aiCache.get(cacheKey);
                 if (cached) {
                     btn.classList.remove("loading");
@@ -997,13 +1397,56 @@
             };
             link.parentNode.appendChild(btn);
         }
-        showAiResponse(card, text) {
+
+        showAiResponse(card, rawText) {
             const box = document.createElement("div");
             box.className = "kw-ai-response-box";
-            box.innerText = text;
-            card
-                .querySelector(".wants-card__description-text")
-                .appendChild(box);
+
+            const pitchMatch = rawText.match(/<pitch>([\s\S]*?)<\/pitch>/i);
+            const cleanAnalysis = rawText
+                .replace(/<pitch>[\s\S]*?<\/pitch>/gi, "")
+                .trim();
+
+            const analysisEl = document.createElement("div");
+            analysisEl.textContent = cleanAnalysis;
+            box.appendChild(analysisEl);
+
+            if (pitchMatch && pitchMatch[1].trim()) {
+                const pitchText = pitchMatch[1].trim();
+                const pitchBox = document.createElement("div");
+                pitchBox.className = "kw-ai-pitch-box";
+
+                const head = document.createElement("div");
+                head.className = "kw-ai-pitch-head";
+                head.innerHTML = `<span>✍️ Черновик отклика:</span>`;
+
+                const copyBtn = document.createElement("button");
+                copyBtn.type = "button";
+                copyBtn.className = "kw-copy-pitch-btn";
+                copyBtn.textContent = "📋 Скопировать отклик";
+                copyBtn.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    navigator.clipboard.writeText(pitchText).then(() => {
+                        copyBtn.textContent = "✅ Скопировано!";
+                        setTimeout(() => {
+                            copyBtn.textContent = "📋 Скопировать отклик";
+                        }, 2000);
+                    });
+                };
+
+                head.appendChild(copyBtn);
+                const pitchBody = document.createElement("div");
+                pitchBody.textContent = pitchText;
+
+                pitchBox.appendChild(head);
+                pitchBox.appendChild(pitchBody);
+                box.appendChild(pitchBox);
+            }
+
+            card.querySelector(".wants-card__description-text").appendChild(
+                box,
+            );
         }
     }
 
@@ -1014,9 +1457,106 @@
             this.processor = new CardProcessor(this);
             this.infinite = new InfiniteScrollManager(this);
             this.ui = new UIManager(this);
-            // Сессионный кэш AI-ответов по карточкам (в памяти, не localStorage)
             this.aiCache = new Map();
+            this.initSeenCards();
         }
+
+        initSeenCards() {
+            this.isFirstSessionLoad = false;
+            try {
+                const raw = sessionStorage.getItem("kw_seen_cards");
+                if (raw) {
+                    this.seenCards = new Set(JSON.parse(raw));
+                } else {
+                    this.seenCards = new Set();
+                    this.isFirstSessionLoad = true;
+                }
+            } catch (e) {
+                this.seenCards = new Set();
+                this.isFirstSessionLoad = true;
+            }
+        }
+
+        saveSeenCards() {
+            try {
+                const arr = Array.from(this.seenCards).slice(-400);
+                sessionStorage.setItem("kw_seen_cards", JSON.stringify(arr));
+            } catch (e) {
+                // ignore quota errors
+            }
+        }
+
+        checkNewAndSniper(card, isSpam) {
+            if (card.hasAttribute("data-kw-from-scroll")) return;
+
+            const sig = this.infinite.getCardSignature(card);
+            if (!sig) return;
+
+            if (this.isFirstSessionLoad) {
+                this.seenCards.add(sig);
+                return;
+            }
+
+            if (this.seenCards.has(sig)) return;
+            this.seenCards.add(sig);
+            this.saveSeenCards();
+
+            const title = card.querySelector(".wants-card__header-title");
+            if (title && !title.querySelector(".kw-badge-new")) {
+                title.insertAdjacentHTML(
+                    "afterbegin",
+                    '<span class="kw-badge kw-badge-new">✨ НОВЫЙ</span>',
+                );
+            }
+
+            if (isSpam) return;
+            if (!this.config.get(this.config.keys.sniperMode)) return;
+
+            const price = parseInt(card.dataset.kwPrice || "0", 10);
+            const hireRate =
+                card.dataset.kwHireRate !== undefined
+                    ? parseInt(card.dataset.kwHireRate, 10)
+                    : null;
+            const offers = parseInt(card.dataset.kwOffers || "0", 10);
+            const hasFav = Boolean(card.dataset.kwFav);
+
+            if (offers >= DEFAULTS.badOffersMin) return;
+            if (hireRate !== null && hireRate < DEFAULTS.badHireRate) return;
+            if (price > 0 && price <= DEFAULTS.badPrice && !hasFav) return;
+
+            const isTargetOrder =
+                hasFav ||
+                price >= DEFAULTS.goodPrice ||
+                (price > DEFAULTS.badPrice &&
+                    hireRate !== null &&
+                    hireRate >= DEFAULTS.goodHireRate);
+
+            if (isTargetOrder) {
+                const titleText =
+                    card
+                        .querySelector(".wants-card__header-title a")
+                        ?.textContent?.trim() || "Новый заказ";
+                const priceLabel = price > 0 ? `${price} ₽` : "Бюджет в ТЗ";
+                const hireLabel =
+                    hireRate !== null ? `Нанято: ${hireRate}%` : "Новичок";
+                const favPrefix = hasFav ? `⭐ [${card.dataset.kwFav}] ` : "";
+
+                playNotificationSound();
+                GM_notification({
+                    title: `🎯 Снайпер Kwork: ${priceLabel} (${hireLabel})`,
+                    text: `${favPrefix}${titleText}`,
+                    timeout: 8000,
+                    onclick: () => {
+                        window.focus();
+                        card.scrollIntoView({
+                            behavior: "smooth",
+                            block: "center",
+                        });
+                    },
+                });
+            }
+        }
+
         cacheAiResponse(key, response) {
             if (!key) return;
             this.aiCache.set(key, response);
@@ -1025,20 +1565,25 @@
                 if (oldest !== undefined) this.aiCache.delete(oldest);
             }
         }
+
         restoreScroll() {
             const raw = sessionStorage.getItem("kw_scroll_pos");
             if (raw === null) return;
             sessionStorage.removeItem("kw_scroll_pos");
             const y = parseInt(raw, 10);
-            // У самого верха оставляем топ — там появляются новые заказы.
             if (!Number.isFinite(y) || y < 800) return;
             window.scrollTo(0, y);
         }
+
         init() {
             safe("панель управления", () => this.ui.renderPanel());
             safe("раскрытие описаний", () => this.fixExpandButtons());
             safe("восстановление скролла", () => this.restoreScroll());
             this.runLoop();
+            if (this.isFirstSessionLoad && this.seenCards.size > 0) {
+                this.isFirstSessionLoad = false;
+                this.saveSeenCards();
+            }
             new MutationObserver((ms) => {
                 if (ms.some((m) => m.addedNodes.length)) this.runLoop();
             }).observe(
@@ -1046,8 +1591,9 @@
                 { childList: true, subtree: true },
             );
             setInterval(() => this.tick(), 1000);
-            setInterval(() => this.runLoop(), 500);
+            setInterval(() => this.runLoop(), 1500);
         }
+
         fixExpandButtons() {
             document.addEventListener("click", (e) => {
                 if (!e.target.classList.contains("kw-link-dashed")) return;
@@ -1078,35 +1624,44 @@
                 }
             });
         }
+
         runLoop() {
-            // Диагностика вёрстки ~каждые 10 секунд (20 проходов по 500 мс)
             this.loopCount = (this.loopCount || 0) + 1;
-            if (this.loopCount % 20 === 1) checkDomHealth();
+            if (this.loopCount % 10 === 1) checkDomHealth();
             safe("обработка карточек", () => {
                 document.querySelectorAll(".want-card").forEach((card) => {
                     this.processor.process(card);
                 });
+                if (this.isFirstSessionLoad && this.seenCards.size > 0) {
+                    this.isFirstSessionLoad = false;
+                    this.saveSeenCards();
+                }
             });
         }
+
         reprocessAll(force = false) {
             if (force) {
                 document.querySelectorAll(".want-card").forEach((c) => {
+                    this.processor.unmarkSpam(c);
                     c.removeAttribute("data-kw-state");
-                    c.classList.remove("kw-strip-good", "kw-strip-bad");
-                    const aiBox = c.querySelector(".kw-ai-response-box");
-                    if (aiBox) aiBox.remove();
-                    const aiBtn = c.querySelector(".kw-ai-btn");
-                    if (aiBtn) aiBtn.remove();
+                    c.removeAttribute("data-kw-fav");
+                    c.classList.remove(
+                        "kw-strip-good",
+                        "kw-strip-bad",
+                        "kw-strip-fav",
+                    );
+                    const favBadge = c.querySelector(".kw-badge-fav");
+                    if (favBadge) favBadge.remove();
                 });
             }
             this.runLoop();
         }
+
         tick() {
             if (!this.config.get(this.config.keys.autoRefresh)) return;
             this.ui.timeLeft--;
             this.ui.updateTimerUI();
             if (this.ui.timeLeft <= 0) {
-                // Позиция скролла — временное значение в sessionStorage, не настройка.
                 sessionStorage.setItem("kw_scroll_pos", String(window.scrollY));
                 window.location.reload();
             }
